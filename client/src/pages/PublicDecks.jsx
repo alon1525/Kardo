@@ -156,11 +156,11 @@ const PublicDecks = () => {
             {filteredDecks.map(deck => (
               <div
                 key={deck.id}
-                className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow p-6"
+                className="bg-white rounded-lg shadow hover:shadow-xl transition-all border-2 border-gray-100 hover:border-primary-300 p-6 transform hover:-translate-y-1"
               >
                 <div className="flex items-start justify-between mb-3">
                   <h3 className="text-xl font-semibold text-gray-900">{deck.name}</h3>
-                  <span className="text-xs bg-primary-100 text-primary-800 px-2 py-1 rounded">
+                  <span className="text-xs bg-gradient-to-r from-primary-500 to-primary-600 text-white px-3 py-1 rounded-full font-semibold shadow-sm">
                     {deck.language}
                   </span>
                 </div>

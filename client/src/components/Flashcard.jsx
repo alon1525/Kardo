@@ -22,7 +22,7 @@ const Flashcard = ({ card, isFlipped, onFlip }) => {
                style={{ minHeight: '300px' }}
           >
             <div className="flex flex-col items-center justify-center h-full">
-              <p className="text-2xl font-semibold text-center mb-4">{card.front}</p>
+              <p className="text-2xl font-semibold text-center mb-4">{frontContent}</p>
               <p className="text-sm text-primary-100">Click to flip</p>
             </div>
           </div>
@@ -35,7 +35,7 @@ const Flashcard = ({ card, isFlipped, onFlip }) => {
                style={{ minHeight: '300px' }}
           >
             <div className="flex flex-col items-center justify-center h-full">
-              <p className="text-3xl font-bold text-gray-900 text-center mb-4">{card.back}</p>
+              <p className="text-3xl font-bold text-gray-900 text-center mb-4">{backContent}</p>
               <p className="text-sm text-gray-500 mb-4">Click to flip back</p>
               <button
                 onClick={(e) => {

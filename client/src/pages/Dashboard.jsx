@@ -15,6 +15,11 @@ const Dashboard = () => {
   const [decks, setDecks] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterLanguage, setFilterLanguage] = useState('all');
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newDeckName, setNewDeckName] = useState('');
+  const [newDeckDescription, setNewDeckDescription] = useState('');
+  const [newDeckLanguage, setNewDeckLanguage] = useState('English');
+  const [isPublic, setIsPublic] = useState(false);
   const [stats, setStats] = useState({
     cardsStudiedToday: 0,
     streak: 0,
@@ -44,15 +49,21 @@ const Dashboard = () => {
   }, [currentUser]);
 
   const handleCreateDeck = () => {
+    if (!newDeckName.trim()) {
+      alert('Please enter a deck name');
+      return;
+    }
+    
     if (!currentUser) return;
     
     const userId = currentUser.id || currentUser.uid;
     const deckId = Date.now().toString();
     const newDeck = {
       id: deckId,
-      name: 'New Deck',
-      description: 'Add your description here',
-      language: 'English',
+      name: newDeckName.trim(),
+      description: newDeckDescription.trim(),
+      language: newDeckLanguage,
+      isPublic: isPublic,
       cardCount: 0,
       createdAt: new Date().toISOString(),
       cards: []
@@ -60,7 +71,26 @@ const Dashboard = () => {
     const updatedDecks = [...decks, newDeck];
     setDecks(updatedDecks);
     saveDecksToStorage(userId, updatedDecks);
+    
+    // Reset form and close modal
+    setNewDeckName('');
+    setNewDeckDescription('');
+    setNewDeckLanguage('English');
+    setIsPublic(false);
+    setShowCreateModal(false);
+    
     navigate(`/deck/${deckId}`);
+  };
+
+  const handleDeleteDeck = (deckId, deckName) => {
+    if (window.confirm(`Are you sure you want to delete "${deckName}"?`)) {
+      if (!currentUser) return;
+      
+      const userId = currentUser.id || currentUser.uid;
+      const updatedDecks = decks.filter(d => d.id !== deckId);
+      setDecks(updatedDecks);
+      saveDecksToStorage(userId, updatedDecks);
+    }
   };
 
   const filteredDecks = decks.filter(deck => {
@@ -135,7 +165,7 @@ const Dashboard = () => {
           <div className="flex flex-col sm:flex-row gap-4 justify-between items-center">
             <h2 className="text-xl font-semibold">Quick Actions</h2>
             <div className="flex flex-wrap gap-3">
-              <button onClick={handleCreateDeck} className="btn-primary flex items-center gap-2">
+              <button onClick={() => setShowCreateModal(true)} className="btn-primary flex items-center gap-2">
                 <span className="material-icons text-lg">add</span>
                 Create New Deck
               </button>
@@ -182,7 +212,7 @@ const Dashboard = () => {
               {searchTerm ? 'Try a different search term' : 'Create your first deck to get started'}
             </p>
             {!searchTerm && (
-              <button onClick={handleCreateDeck} className="btn-primary">
+              <button onClick={() => setShowCreateModal(true)} className="btn-primary">
                 Create Your First Deck
               </button>
             )}
@@ -190,27 +220,161 @@ const Dashboard = () => {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredDecks.map(deck => (
-              <Link
+              <div
                 key={deck.id}
-                to={`/deck/${deck.id}`}
-                className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow p-6 block"
+                className="bg-white rounded-lg shadow hover:shadow-xl transition-all border-2 border-gray-100 hover:border-primary-300 p-6 transform hover:-translate-y-1 relative group"
               >
+                <Link to={`/deck/${deck.id}`} className="block">
                 <div className="flex items-start justify-between mb-3">
                   <h3 className="text-xl font-semibold text-gray-900">{deck.name}</h3>
-                  <span className="text-xs bg-primary-100 text-primary-800 px-2 py-1 rounded">
+                  <span className="text-xs bg-gradient-to-r from-primary-500 to-primary-600 text-white px-3 py-1 rounded-full font-semibold shadow-sm">
                     {deck.language}
                   </span>
                 </div>
-                <p className="text-gray-600 text-sm mb-4">{deck.description}</p>
-                <div className="flex items-center text-sm text-gray-500">
-                  <span className="mr-4">📇 {deck.cardCount} cards</span>
-                  <span>📅 {new Date(deck.createdAt).toLocaleDateString()}</span>
+                <p className="text-gray-600 text-sm mb-4">
+                  {deck.description && deck.description.length > 35 
+                    ? `${deck.description.substring(0, 35)}...` 
+                    : deck.description || 'No description'}
+                </p>
+                <div className="flex items-center text-sm text-gray-600 gap-4">
+                  <span className="flex items-center gap-1">
+                    <span className="material-icons text-base text-blue-500">description</span>
+                    {deck.cardCount} cards
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="material-icons text-base text-green-500">calendar_today</span>
+                    {new Date(deck.createdAt).toLocaleDateString()}
+                  </span>
                 </div>
-              </Link>
+                </Link>
+                
+                {/* Delete Button */}
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleDeleteDeck(deck.id, deck.name);
+                  }}
+                  className="absolute top-1 right-1 p-1 text-red-500 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 rounded-full z-10"
+                  title="Delete deck"
+                >
+                  <span className="material-icons text-base">delete</span>
+                </button>
+              </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Create Deck Modal */}
+      {showCreateModal && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          onClick={() => {
+            setShowCreateModal(false);
+            setNewDeckName('');
+            setNewDeckDescription('');
+            setNewDeckLanguage('English');
+            setIsPublic(false);
+          }}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-2xl font-bold mb-4">Create New Deck</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Deck Name <span className="text-gray-500">({newDeckName.length}/15)</span>
+                </label>
+                <input
+                  type="text"
+                  maxLength={15}
+                  value={newDeckName}
+                  onChange={(e) => setNewDeckName(e.target.value)}
+                  placeholder="Enter deck name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Description <span className="text-gray-500">({newDeckDescription.length}/100)</span>
+                </label>
+                <textarea
+                  maxLength={100}
+                  value={newDeckDescription}
+                  onChange={(e) => setNewDeckDescription(e.target.value)}
+                  placeholder="Enter description"
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Language
+                </label>
+                <select
+                  value={newDeckLanguage}
+                  onChange={(e) => setNewDeckLanguage(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="English">English</option>
+                  <option value="Spanish">Spanish</option>
+                  <option value="French">French</option>
+                  <option value="German">German</option>
+                  <option value="Italian">Italian</option>
+                  <option value="Portuguese">Portuguese</option>
+                  <option value="Japanese">Japanese</option>
+                  <option value="Chinese">Chinese</option>
+                  <option value="Korean">Korean</option>
+                  <option value="Arabic">Arabic</option>
+                  <option value="Russian">Russian</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="isPublic"
+                  checked={isPublic}
+                  onChange={(e) => setIsPublic(e.target.checked)}
+                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                />
+                <label htmlFor="isPublic" className="ml-2 text-sm text-gray-700">
+                  Make this deck public (community can download)
+                </label>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={handleCreateDeck}
+                className="flex-1 btn-primary"
+                disabled={!newDeckName.trim()}
+              >
+                Create Deck
+              </button>
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setNewDeckName('');
+                  setNewDeckDescription('');
+                  setNewDeckLanguage('English');
+                  setIsPublic(false);
+                }}
+                className="flex-1 btn-secondary"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Footer />
     </div>

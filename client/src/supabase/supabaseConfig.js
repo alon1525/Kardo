@@ -1,8 +1,12 @@
 // Supabase configuration file
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://fmdwerlustnzjlfurnur.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZtZHdlcmx1c3RuempsZnVybnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE2MzcwMTEsImV4cCI6MjA3NzIxMzAxMX0.5rZJFgjv0ipYSSrnfW1mRpwquI9GTibpaNNv1oTP6Iw';
+// Environment variables REQUIRED - set them in .env file
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Missing Supabase environment variables. Please check your .env file.');
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
