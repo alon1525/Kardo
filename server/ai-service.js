@@ -1,7 +1,6 @@
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
 
-const token = process.env.GITHUB_TOKEN;
 const endpoint = "https://models.github.ai/inference";
 const model = "meta/Llama-4-Scout-17B-16E-Instruct";
 
@@ -9,6 +8,7 @@ const model = "meta/Llama-4-Scout-17B-16E-Instruct";
  * Initialize the AI client
  */
 function getAIClient() {
+  const token = process.env.GITHUB_TOKEN;
   if (!token) {
     throw new Error("GITHUB_TOKEN environment variable is not set");
   }
