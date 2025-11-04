@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
+import { createDeck, addCard } from '../api/decks';
 
 /**
  * Public decks page - browse and search community decks
@@ -70,31 +71,44 @@ const PublicDecks = () => {
 
   const handleDownloadDeck = async (deckId) => {
     try {
+      // First, download the deck (increments download count)
       const response = await fetch(`http://localhost:5000/api/decks/${deckId}/download`, {
         method: 'POST'
       });
       const downloadedDeck = await response.json();
       
-      // Save to user's decks (localStorage for now)
-      const userId = currentUser?.id || currentUser?.uid;
-      const userDecks = JSON.parse(localStorage.getItem(`decks_${userId}`) || '[]');
+      if (!currentUser) {
+        alert('Please log in to download decks');
+        return;
+      }
       
-      // Create a copy with a new ID for the user
-      const newDeck = {
-        ...downloadedDeck,
-        id: Date.now().toString(),
-        user_id: userId,
-        is_public: false // Downloaded decks become private
-      };
+      const userId = currentUser?.id || currentUser?.uid || currentUser?.email;
       
-      userDecks.push(newDeck);
-      localStorage.setItem(`decks_${userId}`, JSON.stringify(userDecks));
+      const userEmail = currentUser?.email || null;
+      // Create a new deck for the user with the downloaded deck's cards
+      const newDeck = await createDeck(userId, {
+        name: `${downloadedDeck.name} (Downloaded)`,
+        description: downloadedDeck.description || 'Downloaded from community',
+        language: downloadedDeck.language,
+        isPublic: false // Downloaded decks become private
+      }, userEmail);
+      
+      // Add all cards from the downloaded deck to the new deck
+      if (downloadedDeck.cards && Array.isArray(downloadedDeck.cards) && downloadedDeck.cards.length > 0) {
+        for (const card of downloadedDeck.cards) {
+          await addCard(newDeck.id, {
+            front: card.front || { content: card.front?.content || '' },
+            back: card.back || { content: card.back?.content || '' },
+            difficulty: card.difficulty || 'medium'
+          });
+        }
+      }
       
       alert('Deck downloaded successfully! Redirecting to dashboard...');
       navigate('/dashboard');
     } catch (error) {
       console.error('Error downloading deck:', error);
-      alert('Error downloading deck');
+      alert('Error downloading deck. Please try again.');
     }
   };
 
@@ -166,13 +180,13 @@ const PublicDecks = () => {
                 </div>
                 <p className="text-gray-600 text-sm mb-4">{deck.description}</p>
                 <div className="flex items-center justify-between text-sm text-gray-500 mb-4">
-                  <span className="flex items-center gap-1">
+                  <span className="flex items-center gap-1 min-w-[100px]">
                     <span className="material-icons text-base">description</span>
-                    {deck.card_count || 0} cards
+                    <span className="inline-block min-w-[60px]">{deck.card_count || 0} cards</span>
                   </span>
-                  <span className="flex items-center gap-1">
+                  <span className="flex items-center gap-1 min-w-[120px]">
                     <span className="material-icons text-base">download</span>
-                    {deck.download_count || 0} downloads
+                    <span className="inline-block min-w-[70px]">{deck.download_count || 0} downloads</span>
                   </span>
                 </div>
                 <div className="flex flex-col gap-2">

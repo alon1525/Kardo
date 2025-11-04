@@ -11,7 +11,17 @@ import PrivateRoute from './components/PrivateRoute';
 
 // Redirect authenticated users away from auth pages
 function RedirectIfAuthenticated({ children }) {
-  const { currentUser } = useAuth();
+  const { currentUser, loading } = useAuth();
+  
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-xl">Loading...</div>
+      </div>
+    );
+  }
+  
   return currentUser ? <Navigate to="/dashboard" replace /> : children;
 }
 

@@ -24,6 +24,12 @@ const SignUp = () => {
       return setError('Passwords do not match');
     }
 
+    if (!signup || typeof signup !== 'function') {
+      setError('Authentication service is not available. Please check your Supabase configuration and refresh the page.');
+      console.error('signup is not a function:', typeof signup, signup);
+      return;
+    }
+
     try {
       setError('');
       setLoading(true);
@@ -32,11 +38,19 @@ const SignUp = () => {
       // Check if user needs to confirm email
       if (response.user && !response.session) {
         setSuccess(true);
-      } else {
+        console.log('Signup successful - email confirmation required');
+      } else if (response.session) {
+        // Auto-logged in (email confirmation disabled)
+        console.log('Signup successful - auto-logged in');
         navigate('/dashboard', { replace: true });
+      } else {
+        // Shouldn't happen, but handle it
+        setSuccess(true);
       }
     } catch (err) {
-      setError(err.message || 'Failed to create account');
+      console.error('Signup error caught:', err);
+      const errorMessage = err.message || err.error?.message || 'Failed to create account';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }

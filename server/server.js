@@ -1,7 +1,10 @@
-const express = require('express');
-const { Pool } = require('pg');
-const cors = require('cors');
-require('dotenv').config();
+import express from 'express';
+import { Pool } from 'pg';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { getAISuggestions, getCardExplanation } from './ai-service.js';
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -38,11 +41,40 @@ app.get('/api/health', (req, res) => {
 app.get('/api/decks/:userId', async (req, res) => {
   const userId = req.params.userId;
   
+  console.log('GET /api/decks/:userId - userId:', userId);
+  
   try {
-    const result = await pool.query(
+    // Try to find decks by user_id
+    let result = await pool.query(
       'SELECT * FROM decks WHERE user_id = $1 ORDER BY created_at DESC',
       [userId]
     );
+    
+    console.log(`Found ${result.rows.length} decks for user_id: ${userId}`);
+    
+    // If no decks found, try by email (if userId is an email)
+    if (result.rows.length === 0 && userId.includes('@')) {
+      console.log('No decks found by user_id, trying email:', userId);
+      const userResult = await pool.query(
+        'SELECT user_id FROM users WHERE email = $1',
+        [userId]
+      );
+      if (userResult.rows.length > 0) {
+        const actualUserId = userResult.rows[0].user_id;
+        console.log('Found user by email, user_id:', actualUserId);
+        result = await pool.query(
+          'SELECT * FROM decks WHERE user_id = $1 ORDER BY created_at DESC',
+          [actualUserId]
+        );
+        console.log(`Found ${result.rows.length} decks for user_id: ${actualUserId}`);
+      }
+    }
+    
+    // Also check all decks to see what user_ids exist
+    if (result.rows.length === 0) {
+      const allDecks = await pool.query('SELECT user_id, name FROM decks LIMIT 10');
+      console.log('Sample decks in database (first 10):', allDecks.rows.map(d => ({ user_id: d.user_id, name: d.name })));
+    }
     
     // Parse cards JSON from each deck
     const decks = result.rows.map(deck => ({
@@ -52,15 +84,36 @@ app.get('/api/decks/:userId', async (req, res) => {
     
     res.json(decks);
   } catch (err) {
+    console.error('Error fetching decks:', err);
     res.status(500).json({ error: err.message });
   }
 });
+
+// Helper function to ensure user exists
+const ensureUserExists = async (userId, email = null) => {
+  try {
+    const userCheck = await pool.query('SELECT user_id FROM users WHERE user_id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      // Create user if doesn't exist (for Firebase Auth or other auth providers)
+      await pool.query(
+        'INSERT INTO users (user_id, email) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING',
+        [userId, email || `${userId}@example.com`]
+      );
+    }
+  } catch (err) {
+    console.error('Error ensuring user exists:', err);
+    // Don't throw - let the calling function handle it
+  }
+};
 
 // Create a new deck
 app.post('/api/decks', async (req, res) => {
   const { userId, name, description, language } = req.body;
   
   try {
+    // Ensure user exists in database
+    await ensureUserExists(userId, req.body.email);
+    
     const result = await pool.query(
       'INSERT INTO decks (user_id, name, description, language, cards) VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id',
       [userId, name, description, language, JSON.stringify([])]
@@ -118,21 +171,27 @@ app.get('/api/decks/:deckId/cards', async (req, res) => {
 // Add a card to a deck
 app.post('/api/decks/:deckId/cards', async (req, res) => {
   const deckId = req.params.deckId;
-  const { front, back, difficulty } = req.body;
+  const { front, back, frontAlign, backAlign, frontVerticalAlign, backVerticalAlign, frontFontSize, backFontSize, difficulty } = req.body;
   
   try {
     // Get current cards
     const deckResult = await pool.query('SELECT cards FROM decks WHERE id = $1', [deckId]);
     const currentCards = deckResult.rows[0]?.cards || [];
     
-    // Add new card with front/back objects
+    // Add new card with front/back objects including alignment and font size
     const newCard = {
       id: Date.now(),
       front: {
-        content: front
+        content: front,
+        align: frontAlign || 'center',
+        verticalAlign: frontVerticalAlign || 'middle',
+        fontSize: frontFontSize || '18'
       },
       back: {
-        content: back
+        content: back,
+        align: backAlign || 'center',
+        verticalAlign: backVerticalAlign || 'middle',
+        fontSize: backFontSize || '18'
       },
       difficulty: difficulty || 'medium'
     };
@@ -364,8 +423,70 @@ app.put('/api/decks/:id/public', async (req, res) => {
   }
 });
 
+// AI Suggestions endpoint
+app.post('/api/decks/:deckId/ai-suggestions', async (req, res) => {
+  const deckId = req.params.deckId;
+  const { numSuggestions = 5 } = req.body;
+  
+  try {
+    // Get deck information
+    const deckResult = await pool.query(
+      'SELECT name, description, language, cards FROM decks WHERE id = $1',
+      [deckId]
+    );
+    
+    if (deckResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Deck not found' });
+    }
+    
+    const deck = deckResult.rows[0];
+    const existingCards = deck.cards || [];
+    
+    // Get AI suggestions
+    const suggestions = await getAISuggestions(
+      deck.name,
+      deck.language,
+      existingCards,
+      numSuggestions
+    );
+    
+    res.json({ suggestions });
+  } catch (err) {
+    console.error('Error getting AI suggestions:', err);
+    res.status(500).json({ 
+      error: err.message || 'Failed to get AI suggestions',
+      details: err.toString()
+    });
+  }
+});
+
+// AI Card Explanation endpoint
+app.post('/api/cards/explain', async (req, res) => {
+  const { front, back, language } = req.body;
+  
+  if (!front || !back) {
+    return res.status(400).json({ error: 'Front and back are required' });
+  }
+  
+  try {
+    const explanation = await getCardExplanation(front, back, language || 'English');
+    res.json({ explanation });
+  } catch (err) {
+    console.error('Error getting card explanation:', err);
+    res.status(500).json({ 
+      error: err.message || 'Failed to get explanation',
+      details: err.toString()
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  if (process.env.GITHUB_TOKEN) {
+    console.log('AI Suggestions: Enabled (GitHub Llama model)');
+  } else {
+    console.log('AI Suggestions: Disabled (GITHUB_TOKEN not set)');
+  }
 });
 
 

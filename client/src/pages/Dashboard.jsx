@@ -3,8 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import { loadDecksFromStorage, saveDecksToStorage, loadStatsFromStorage, saveStatsToStorage } from '../utils/localStorage';
-import { sampleDecks } from '../data/sampleDecks';
+import { getUserDecks, createDeck, deleteDeck, getUserStats, updateDeckPublicStatus } from '../api/decks';
 
 /**
  * User dashboard showing decks, stats, and options to create/import decks
@@ -25,71 +24,94 @@ const Dashboard = () => {
     streak: 0,
     lastStudyDate: null
   });
+  const [loading, setLoading] = useState(true);
+  const [creatingDeck, setCreatingDeck] = useState(false);
 
   useEffect(() => {
     if (currentUser) {
-      // Use Supabase user ID (or Firebase UID for backward compatibility)
-      const userId = currentUser.id || currentUser.uid;
-      
-      // Load decks from localStorage
-      let userDecks = loadDecksFromStorage(userId);
-      
-      // If user has no decks, initialize with sample decks
-      if (userDecks.length === 0) {
-        userDecks = sampleDecks;
-        saveDecksToStorage(userId, userDecks);
-      }
-      
-      setDecks(userDecks);
-      
-      // Load stats
-      const userStats = loadStatsFromStorage(userId);
-      setStats(userStats);
+      loadUserData();
     }
   }, [currentUser]);
 
-  const handleCreateDeck = () => {
+  const loadUserData = async () => {
+    if (!currentUser) return;
+    
+    try {
+      setLoading(true);
+      const userId = currentUser.id || currentUser.uid || currentUser.email;
+      console.log('Loading user data. currentUser:', currentUser);
+      console.log('Using userId:', userId);
+      
+      // Load decks from API
+      const userDecks = await getUserDecks(userId);
+      console.log('Loaded decks:', userDecks);
+      setDecks(userDecks);
+      
+      // Load stats from API
+      const userStats = await getUserStats(userId);
+      setStats(userStats);
+    } catch (error) {
+      console.error('Error loading user data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateDeck = async () => {
     if (!newDeckName.trim()) {
       alert('Please enter a deck name');
       return;
     }
     
-    if (!currentUser) return;
+    if (!currentUser || creatingDeck) return;
     
-    const userId = currentUser.id || currentUser.uid;
-    const deckId = Date.now().toString();
-    const newDeck = {
-      id: deckId,
-      name: newDeckName.trim(),
-      description: newDeckDescription.trim(),
-      language: newDeckLanguage,
-      isPublic: isPublic,
-      cardCount: 0,
-      createdAt: new Date().toISOString(),
-      cards: []
-    };
-    const updatedDecks = [...decks, newDeck];
-    setDecks(updatedDecks);
-    saveDecksToStorage(userId, updatedDecks);
-    
-    // Reset form and close modal
-    setNewDeckName('');
-    setNewDeckDescription('');
-    setNewDeckLanguage('English');
-    setIsPublic(false);
-    setShowCreateModal(false);
-    
-    navigate(`/deck/${deckId}`);
+    try {
+      setCreatingDeck(true);
+      const userId = currentUser.id || currentUser.uid || currentUser.email;
+      const userEmail = currentUser.email || null;
+      const newDeck = await createDeck(userId, {
+        name: newDeckName.trim(),
+        description: newDeckDescription.trim(),
+        language: newDeckLanguage,
+        isPublic: isPublic
+      }, userEmail);
+      
+      // Update public status if needed
+      if (isPublic) {
+        await updateDeckPublicStatus(newDeck.id, true);
+      }
+      
+      // Reload decks
+      await loadUserData();
+      
+      // Reset form and close modal
+      setNewDeckName('');
+      setNewDeckDescription('');
+      setNewDeckLanguage('English');
+      setIsPublic(false);
+      setShowCreateModal(false);
+      setCreatingDeck(false);
+      
+      navigate(`/deck/${newDeck.id}`);
+    } catch (error) {
+      console.error('Error creating deck:', error);
+      alert('Failed to create deck. Please try again.');
+      setCreatingDeck(false);
+    }
   };
 
-  const handleDeleteDeck = (deckId, deckName) => {
+  const handleDeleteDeck = async (deckId, deckName) => {
     if (window.confirm(`Are you sure you want to delete "${deckName}"?`)) {
       if (!currentUser) return;
       
-      const userId = currentUser.id || currentUser.uid;
-      const updatedDecks = decks.filter(d => d.id !== deckId);
-      setDecks(updatedDecks);
-      saveDecksToStorage(userId, updatedDecks);
+      try {
+        await deleteDeck(deckId);
+        // Reload decks
+        await loadUserData();
+      } catch (error) {
+        console.error('Error deleting deck:', error);
+        alert('Failed to delete deck. Please try again.');
+      }
     }
   };
 
@@ -130,9 +152,9 @@ const Dashboard = () => {
               <div className="bg-blue-100 rounded-full p-3 mr-4">
                 <span className="material-icons text-2xl text-blue-600">book</span>
               </div>
-              <div>
+              <div className="min-w-[100px]">
                 <p className="text-sm text-gray-600">Cards Today</p>
-                <p className="text-2xl font-bold">{stats.cardsStudiedToday}</p>
+                <p className="text-2xl font-bold min-w-[60px] inline-block">{stats.cardsStudiedToday}</p>
               </div>
             </div>
           </div>
@@ -141,9 +163,9 @@ const Dashboard = () => {
               <div className="bg-green-100 rounded-full p-3 mr-4">
                 <span className="material-icons text-2xl text-green-600">local_fire_department</span>
               </div>
-              <div>
+              <div className="min-w-[100px]">
                 <p className="text-sm text-gray-600">Current Streak</p>
-                <p className="text-2xl font-bold">{stats.streak} days</p>
+                <p className="text-2xl font-bold min-w-[60px] inline-block">{stats.streak} days</p>
               </div>
             </div>
           </div>
@@ -152,9 +174,9 @@ const Dashboard = () => {
               <div className="bg-purple-100 rounded-full p-3 mr-4">
                 <span className="material-icons text-2xl text-purple-600">bar_chart</span>
               </div>
-              <div>
+              <div className="min-w-[100px]">
                 <p className="text-sm text-gray-600">Total Decks</p>
-                <p className="text-2xl font-bold">{decks.length}</p>
+                <p className="text-2xl font-bold min-w-[60px] inline-block">{decks.length}</p>
               </div>
             </div>
           </div>
@@ -204,7 +226,11 @@ const Dashboard = () => {
         </div>
 
         {/* Decks Grid */}
-        {filteredDecks.length === 0 ? (
+        {loading ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center">
+            <div className="text-xl">Loading decks...</div>
+          </div>
+        ) : filteredDecks.length === 0 ? (
           <div className="bg-white rounded-lg shadow p-12 text-center">
             <span className="material-icons text-6xl text-gray-400 mb-4">folder_open</span>
             <h3 className="text-xl font-semibold mb-2">No decks found</h3>
@@ -237,9 +263,9 @@ const Dashboard = () => {
                     : deck.description || 'No description'}
                 </p>
                 <div className="flex items-center text-sm text-gray-600 gap-4">
-                  <span className="flex items-center gap-1">
+                  <span className="flex items-center gap-1 min-w-[80px]">
                     <span className="material-icons text-base text-blue-500">description</span>
-                    {deck.cardCount} cards
+                    <span className="inline-block min-w-[50px]">{deck.cardCount} cards</span>
                   </span>
                   <span className="flex items-center gap-1">
                     <span className="material-icons text-base text-green-500">calendar_today</span>
@@ -354,10 +380,17 @@ const Dashboard = () => {
             <div className="flex gap-3 mt-6">
               <button
                 onClick={handleCreateDeck}
-                className="flex-1 btn-primary"
-                disabled={!newDeckName.trim()}
+                className="flex-1 btn-primary flex items-center justify-center gap-2"
+                disabled={!newDeckName.trim() || creatingDeck}
               >
-                Create Deck
+                {creatingDeck ? (
+                  <>
+                    <span className="material-icons animate-spin text-lg">refresh</span>
+                    Creating...
+                  </>
+                ) : (
+                  'Create Deck'
+                )}
               </button>
               <button
                 onClick={() => {
@@ -366,8 +399,10 @@ const Dashboard = () => {
                   setNewDeckDescription('');
                   setNewDeckLanguage('English');
                   setIsPublic(false);
+                  setCreatingDeck(false);
                 }}
                 className="flex-1 btn-secondary"
+                disabled={creatingDeck}
               >
                 Cancel
               </button>

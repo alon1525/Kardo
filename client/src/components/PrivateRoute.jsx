@@ -5,7 +5,16 @@ import { useAuth } from '../context/AuthContext';
  * Private route component that redirects to login if user is not authenticated
  */
 const PrivateRoute = ({ children }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, loading } = useAuth();
+
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-xl">Loading...</div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return <Navigate to="/login" replace />;

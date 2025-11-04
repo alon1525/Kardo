@@ -8,15 +8,24 @@ import Footer from '../components/Footer';
  * Landing page with hero section, features, and call-to-action
  */
 const LandingPage = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, loading } = useAuth();
   const navigate = useNavigate();
 
-  // Redirect to dashboard if already logged in
+  // Redirect to dashboard if already logged in (only after loading is done)
   useEffect(() => {
-    if (currentUser) {
-      navigate('/dashboard', { replace: true });
-    }
-  }, [currentUser, navigate]);
+    // Wait a bit to ensure auth state has settled after logout
+    const timeoutId = setTimeout(() => {
+      if (!loading && currentUser) {
+        // Double-check that we actually have a valid session
+        // If user was just logged out, currentUser might be null
+        if (currentUser && currentUser.email) {
+          navigate('/dashboard', { replace: true });
+        }
+      }
+    }, 200);
+
+    return () => clearTimeout(timeoutId);
+  }, [currentUser, loading, navigate]);
 
   return (
     <div className="min-h-screen flex flex-col">
