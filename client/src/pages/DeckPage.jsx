@@ -62,6 +62,7 @@ const DeckPage = () => {
 
   // Card editor mode (full-screen card creation)
   const [cardEditorMode, setCardEditorMode] = useState(false);
+  const [editingCardId, setEditingCardId] = useState(null); // Track which card we're editing
   const [editingCard, setEditingCard] = useState({
     front: '',
     back: '',
@@ -182,13 +183,44 @@ const DeckPage = () => {
       frontFontSize: '18',
       backFontSize: '18'
     });
+    setEditingCardId(null); // Not editing an existing card
     setCardEditorMode(true);
     setIsFlipped(false);
     setShowPreview({ front: false, back: false });
     setDeckMode(null); // Reset mode when entering card editor
   };
 
-  const handleSaveCard = async (addMore = false) => {
+  const handleEditCard = (card) => {
+    // Pre-fill the editor with the card's data
+    const frontContent = typeof card.front === 'string' ? card.front : (card.front?.content || '');
+    const backContent = typeof card.back === 'string' ? card.back : (card.back?.content || '');
+    const frontAlign = card.front?.align || 'center';
+    const backAlign = card.back?.align || 'center';
+    const frontVerticalAlign = card.front?.verticalAlign || 'middle';
+    const backVerticalAlign = card.back?.verticalAlign || 'middle';
+    const frontFontSize = card.front?.fontSize || '18';
+    const backFontSize = card.back?.fontSize || '18';
+    
+    setEditingCard({
+      front: frontContent,
+      back: backContent,
+      difficulty: card.difficulty || 'medium',
+      cardType: 'basic', // Default to basic for editing
+      frontAlign: frontAlign,
+      backAlign: backAlign,
+      frontVerticalAlign: frontVerticalAlign,
+      backVerticalAlign: backVerticalAlign,
+      frontFontSize: frontFontSize,
+      backFontSize: backFontSize
+    });
+    setEditingCardId(card.id); // Track which card we're editing
+    setCardEditorMode(true);
+    setIsFlipped(false);
+    setShowPreview({ front: false, back: false });
+    // Keep deckMode as 'edit-cards' so we return to the table
+  };
+
+  const handleSaveCard = async (addMore = false, returnToTable = false) => {
     if (!editingCard.front.trim() || !editingCard.back.trim()) {
       alert('Please fill in both the front and back of the card');
       return;
@@ -197,65 +229,100 @@ const DeckPage = () => {
     try {
       setSavingCard(true);
       
-      // Handle different card types
-      if (editingCard.cardType === 'basic-reversed') {
-        // Create two cards: original and reversed
-        await Promise.all([
-          addCard(deckId, {
-            front: { content: editingCard.front.trim(), align: editingCard.frontAlign, verticalAlign: editingCard.frontVerticalAlign, fontSize: editingCard.frontFontSize || '18' },
-            back: { content: editingCard.back.trim(), align: editingCard.backAlign, verticalAlign: editingCard.backVerticalAlign, fontSize: editingCard.backFontSize || '18' },
-            difficulty: editingCard.difficulty
-          }),
-          addCard(deckId, {
-            front: { content: editingCard.back.trim(), align: editingCard.backAlign, verticalAlign: editingCard.backVerticalAlign, fontSize: editingCard.backFontSize || '18' }, // Reversed: back becomes front
-            back: { content: editingCard.front.trim(), align: editingCard.frontAlign, verticalAlign: editingCard.frontVerticalAlign, fontSize: editingCard.frontFontSize || '18' }, // Reversed: front becomes back
-            difficulty: editingCard.difficulty
-          })
-        ]);
-      } else {
-        // Basic card type - single card
-        await addCard(deckId, {
+      // Check if we're editing an existing card
+      if (editingCardId) {
+        // Update existing card
+        await updateCard(editingCardId, deckId, {
           front: { content: editingCard.front.trim(), align: editingCard.frontAlign, verticalAlign: editingCard.frontVerticalAlign, fontSize: editingCard.frontFontSize || '18' },
           back: { content: editingCard.back.trim(), align: editingCard.backAlign, verticalAlign: editingCard.backVerticalAlign, fontSize: editingCard.backFontSize || '18' },
           difficulty: editingCard.difficulty
         });
-      }
-
-      // Reload cards
-      await loadDeckData();
-
-      if (addMore) {
-        // Reset for next card
-        setEditingCard({
-          front: '',
-          back: '',
-          difficulty: 'medium',
-          cardType: editingCard.cardType, // Keep the same card type
-          frontAlign: editingCard.frontAlign, // Keep alignment preferences
-          backAlign: editingCard.backAlign,
-          frontVerticalAlign: editingCard.frontVerticalAlign, // Keep vertical alignment preferences
-          backVerticalAlign: editingCard.backVerticalAlign,
-          frontFontSize: editingCard.frontFontSize || '18', // Keep font size preferences
-          backFontSize: editingCard.backFontSize || '18'
-        });
-        setIsFlipped(false);
-        setShowPreview({ front: false, back: false });
+        
+        // Reload cards
+        await loadDeckData();
+        
+        // Return to table if we came from edit mode
+        if (returnToTable || deckMode === 'edit-cards') {
+          setCardEditorMode(false);
+          setEditingCardId(null);
+          setDeckMode('edit-cards'); // Return to edit cards table
+          setEditingCard({
+            front: '',
+            back: '',
+            difficulty: 'medium',
+            cardType: 'basic',
+            frontAlign: 'center',
+            backAlign: 'center',
+            frontVerticalAlign: 'middle',
+            backVerticalAlign: 'middle',
+            frontFontSize: '18',
+            backFontSize: '18'
+          });
+          setShowPreview({ front: false, back: false });
+          return;
+        }
       } else {
-        // Close editor
-        setCardEditorMode(false);
-        setEditingCard({
-          front: '',
-          back: '',
-          difficulty: 'medium',
-          cardType: 'basic',
-          frontAlign: 'center',
-          backAlign: 'center',
-          frontVerticalAlign: 'middle',
-          backVerticalAlign: 'middle',
-          frontFontSize: '18',
-          backFontSize: '18'
-        });
-        setShowPreview({ front: false, back: false });
+        // Creating new card(s)
+        // Handle different card types
+        if (editingCard.cardType === 'basic-reversed') {
+          // Create two cards: original and reversed
+          await Promise.all([
+            addCard(deckId, {
+              front: { content: editingCard.front.trim(), align: editingCard.frontAlign, verticalAlign: editingCard.frontVerticalAlign, fontSize: editingCard.frontFontSize || '18' },
+              back: { content: editingCard.back.trim(), align: editingCard.backAlign, verticalAlign: editingCard.backVerticalAlign, fontSize: editingCard.backFontSize || '18' },
+              difficulty: editingCard.difficulty
+            }),
+            addCard(deckId, {
+              front: { content: editingCard.back.trim(), align: editingCard.backAlign, verticalAlign: editingCard.backVerticalAlign, fontSize: editingCard.backFontSize || '18' }, // Reversed: back becomes front
+              back: { content: editingCard.front.trim(), align: editingCard.frontAlign, verticalAlign: editingCard.frontVerticalAlign, fontSize: editingCard.frontFontSize || '18' }, // Reversed: front becomes back
+              difficulty: editingCard.difficulty
+            })
+          ]);
+        } else {
+          // Basic card type - single card
+          await addCard(deckId, {
+            front: { content: editingCard.front.trim(), align: editingCard.frontAlign, verticalAlign: editingCard.frontVerticalAlign, fontSize: editingCard.frontFontSize || '18' },
+            back: { content: editingCard.back.trim(), align: editingCard.backAlign, verticalAlign: editingCard.backVerticalAlign, fontSize: editingCard.backFontSize || '18' },
+            difficulty: editingCard.difficulty
+          });
+        }
+
+        // Reload cards
+        await loadDeckData();
+
+        if (addMore) {
+          // Reset for next card
+          setEditingCard({
+            front: '',
+            back: '',
+            difficulty: 'medium',
+            cardType: editingCard.cardType, // Keep the same card type
+            frontAlign: editingCard.frontAlign, // Keep alignment preferences
+            backAlign: editingCard.backAlign,
+            frontVerticalAlign: editingCard.frontVerticalAlign, // Keep vertical alignment preferences
+            backVerticalAlign: editingCard.backVerticalAlign,
+            frontFontSize: editingCard.frontFontSize || '18', // Keep font size preferences
+            backFontSize: editingCard.backFontSize || '18'
+          });
+          setIsFlipped(false);
+          setShowPreview({ front: false, back: false });
+        } else {
+          // Close editor
+          setCardEditorMode(false);
+          setEditingCard({
+            front: '',
+            back: '',
+            difficulty: 'medium',
+            cardType: 'basic',
+            frontAlign: 'center',
+            backAlign: 'center',
+            frontVerticalAlign: 'middle',
+            backVerticalAlign: 'middle',
+            frontFontSize: '18',
+            backFontSize: '18'
+          });
+          setShowPreview({ front: false, back: false });
+        }
       }
     } catch (error) {
       console.error('Error saving card:', error);
@@ -267,6 +334,7 @@ const DeckPage = () => {
 
   const handleCancelCardEditor = () => {
     setCardEditorMode(false);
+    setEditingCardId(null);
     setEditingCard({
       front: '',
       back: '',
@@ -282,6 +350,10 @@ const DeckPage = () => {
     setIsFlipped(false);
     setShowPreview({ front: false, back: false });
     setActiveTextarea('front');
+    // If we were in edit-cards mode, return to it
+    if (deckMode === 'edit-cards') {
+      // Already in edit-cards mode, just close editor
+    }
   };
 
   // Formatting helper functions
@@ -467,10 +539,10 @@ const DeckPage = () => {
   );
 
   const FormattingToolbarBack = ({ side }) => (
-    <div className="flex items-center gap-1 sm:gap-2 p-2 bg-gray-100 rounded-lg overflow-x-auto scrollbar-hide flex-nowrap sm:flex-wrap">
+    <div className="flex items-center gap-1 sm:gap-2 p-2 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-x-auto scrollbar-hide flex-nowrap sm:flex-wrap">
       <button
         onClick={() => insertMarkdown(side, 'bold')}
-        className="px-2 sm:px-3 py-1.5 bg-white hover:bg-gray-200 text-gray-700 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm font-semibold whitespace-nowrap"
+        className="px-2 sm:px-3 py-1.5 bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm font-semibold whitespace-nowrap"
         title="Bold (Ctrl+B)"
       >
         <span className="material-icons text-sm sm:text-base">format_bold</span>
@@ -478,7 +550,7 @@ const DeckPage = () => {
       </button>
       <button
         onClick={() => insertMarkdown(side, 'italic')}
-        className="px-2 sm:px-3 py-1.5 bg-white hover:bg-gray-200 text-gray-700 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm italic whitespace-nowrap"
+        className="px-2 sm:px-3 py-1.5 bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm italic whitespace-nowrap"
         title="Italic (Ctrl+I)"
       >
         <span className="material-icons text-sm sm:text-base">format_italic</span>
@@ -486,7 +558,7 @@ const DeckPage = () => {
       </button>
       <button
         onClick={() => insertMarkdown(side, 'code')}
-        className="px-2 sm:px-3 py-1.5 bg-white hover:bg-gray-200 text-gray-700 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm font-mono whitespace-nowrap"
+        className="px-2 sm:px-3 py-1.5 bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm font-mono whitespace-nowrap"
         title="Code"
       >
         <span className="material-icons text-sm sm:text-base">code</span>
@@ -494,19 +566,19 @@ const DeckPage = () => {
       </button>
       <button
         onClick={() => insertMarkdown(side, 'heading')}
-        className="px-2 sm:px-3 py-1.5 bg-white hover:bg-gray-200 text-gray-700 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap"
+        className="px-2 sm:px-3 py-1.5 bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap"
         title="Heading"
       >
         <span className="material-icons text-sm sm:text-base">title</span>
         <span className="hidden sm:inline">Heading</span>
       </button>
-      <div className="border-l border-gray-300 h-6 mx-1"></div>
+      <div className="border-l border-gray-300 dark:border-gray-600 h-6 mx-1"></div>
       <button
         onClick={() => setEditingCard({ ...editingCard, [`${side}Align`]: 'left' })}
         className={`px-2 sm:px-3 py-1.5 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap ${
           editingCard[`${side}Align`] === 'left'
-            ? 'bg-primary-100 text-primary-700'
-            : 'bg-white hover:bg-gray-200 text-gray-700'
+            ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
+            : 'bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200'
         }`}
         title="Align Left"
       >
@@ -517,8 +589,8 @@ const DeckPage = () => {
         onClick={() => setEditingCard({ ...editingCard, [`${side}Align`]: 'center' })}
         className={`px-2 sm:px-3 py-1.5 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap ${
           editingCard[`${side}Align`] === 'center'
-            ? 'bg-primary-100 text-primary-700'
-            : 'bg-white hover:bg-gray-200 text-gray-700'
+            ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
+            : 'bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200'
         }`}
         title="Align Center"
       >
@@ -529,21 +601,21 @@ const DeckPage = () => {
         onClick={() => setEditingCard({ ...editingCard, [`${side}Align`]: 'right' })}
         className={`px-2 sm:px-3 py-1.5 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap ${
           editingCard[`${side}Align`] === 'right'
-            ? 'bg-primary-100 text-primary-700'
-            : 'bg-white hover:bg-gray-200 text-gray-700'
+            ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
+            : 'bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200'
         }`}
         title="Align Right"
       >
         <span className="material-icons text-sm sm:text-base">format_align_right</span>
         <span className="hidden sm:inline">Right</span>
       </button>
-      <div className="border-l border-gray-300 h-6 mx-1"></div>
+      <div className="border-l border-gray-300 dark:border-gray-600 h-6 mx-1"></div>
       <button
         onClick={() => setEditingCard({ ...editingCard, [`${side}VerticalAlign`]: 'top' })}
         className={`px-2 sm:px-3 py-1.5 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap ${
           editingCard[`${side}VerticalAlign`] === 'top'
-            ? 'bg-primary-100 text-primary-700'
-            : 'bg-white hover:bg-gray-200 text-gray-700'
+            ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
+            : 'bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200'
         }`}
         title="Align Top"
       >
@@ -554,21 +626,21 @@ const DeckPage = () => {
         onClick={() => setEditingCard({ ...editingCard, [`${side}VerticalAlign`]: 'middle' })}
         className={`px-2 sm:px-3 py-1.5 rounded transition-colors flex items-center gap-1 text-xs sm:text-sm whitespace-nowrap ${
           editingCard[`${side}VerticalAlign`] === 'middle'
-            ? 'bg-primary-100 text-primary-700'
-            : 'bg-white hover:bg-gray-200 text-gray-700'
+            ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300'
+            : 'bg-white dark:bg-gray-600 hover:bg-gray-200 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200'
         }`}
         title="Align Middle"
       >
         <span className="material-icons text-sm sm:text-base">vertical_align_center</span>
         <span className="hidden sm:inline">Middle</span>
       </button>
-      <div className="border-l border-gray-300 h-6 mx-1"></div>
+      <div className="border-l border-gray-300 dark:border-gray-600 h-6 mx-1"></div>
       <div className="flex items-center gap-1 px-1 sm:px-2 whitespace-nowrap">
-        <span className="material-icons text-sm sm:text-base text-gray-700">text_fields</span>
+        <span className="material-icons text-sm sm:text-base text-gray-700 dark:text-gray-200">text_fields</span>
         <select
           value={editingCard[`${side}FontSize`] || '18'}
           onChange={(e) => setEditingCard({ ...editingCard, [`${side}FontSize`]: e.target.value })}
-          className="bg-white text-gray-700 rounded px-1 sm:px-2 py-1 sm:py-1.5 text-xs sm:text-sm focus:outline-none focus:bg-gray-50 border border-gray-300"
+          className="bg-white dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded px-1 sm:px-2 py-1 sm:py-1.5 text-xs sm:text-sm focus:outline-none focus:bg-gray-50 dark:focus:bg-gray-500 border border-gray-300 dark:border-gray-500"
           title="Font Size"
         >
           <option value="12">12px</option>
@@ -700,41 +772,52 @@ const DeckPage = () => {
   // Full-screen card editor mode
   if (cardEditorMode) {
     return (
-      <div className="min-h-screen flex flex-col bg-gray-100">
+      <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors">
         <Navbar />
         <div className="flex-grow flex items-start justify-center p-4 sm:p-8 overflow-y-auto pt-16">
           <div className="w-full max-w-6xl">
             {/* Card Editor Header */}
             <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
-                <span className="text-xs sm:text-sm font-semibold text-gray-700 whitespace-nowrap">Card Type:</span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setEditingCard({ ...editingCard, cardType: 'basic' })}
-                    className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg border-2 transition-all text-xs sm:text-sm ${
-                      editingCard.cardType === 'basic'
-                        ? 'border-primary-500 bg-primary-50 text-primary-700 font-semibold'
-                        : 'border-gray-200 hover:border-gray-300 text-gray-700'
-                    }`}
-                  >
-                    Basic
-                  </button>
-                  <button
-                    onClick={() => setEditingCard({ ...editingCard, cardType: 'basic-reversed' })}
-                    className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg border-2 transition-all text-xs sm:text-sm ${
-                      editingCard.cardType === 'basic-reversed'
-                        ? 'border-primary-500 bg-primary-50 text-primary-700 font-semibold'
-                        : 'border-gray-200 hover:border-gray-300 text-gray-700'
-                    }`}
-                  >
-                    <span className="hidden sm:inline">Basic (Reversed)</span>
-                    <span className="sm:hidden">Reversed</span>
-                  </button>
-                </div>
+                {editingCardId && (
+                  <div className="flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-semibold">
+                    <span className="material-icons text-base">edit</span>
+                    Editing Card
+                  </div>
+                )}
+                {!editingCardId && (
+                  <>
+                    <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-gray-300 whitespace-nowrap">Card Type:</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setEditingCard({ ...editingCard, cardType: 'basic' })}
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg border-2 transition-all text-xs sm:text-sm ${
+                          editingCard.cardType === 'basic'
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900 text-primary-700 dark:text-primary-300 font-semibold'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 text-gray-700 dark:text-gray-300'
+                        }`}
+                      >
+                        Basic
+                      </button>
+                      <button
+                        onClick={() => setEditingCard({ ...editingCard, cardType: 'basic-reversed' })}
+                        disabled={editingCardId !== null} // Disable reversed card option when editing
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg border-2 transition-all text-xs sm:text-sm ${
+                          editingCard.cardType === 'basic-reversed'
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900 text-primary-700 dark:text-primary-300 font-semibold'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 text-gray-700 dark:text-gray-300'
+                        } ${editingCardId !== null ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <span className="hidden sm:inline">Basic (Reversed)</span>
+                        <span className="sm:hidden">Reversed</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
               <button
                 onClick={handleCancelCardEditor}
-                className="text-gray-600 hover:text-gray-900 self-end sm:self-auto"
+                className="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white self-end sm:self-auto transition-colors"
                 disabled={savingCard}
               >
                 <span className="material-icons text-xl sm:text-2xl">close</span>
@@ -832,13 +915,13 @@ const DeckPage = () => {
                     zIndex: isFlipped ? 10 : 0
                   }}
                 >
-                  <div className="bg-white border-4 border-primary-500 rounded-lg shadow-2xl p-4 sm:p-8 h-full flex flex-col overflow-hidden">
+                  <div className="bg-white dark:bg-gray-800 border-4 border-primary-500 dark:border-primary-600 rounded-lg shadow-2xl p-4 sm:p-8 h-full flex flex-col overflow-hidden">
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-2 sm:mb-4 gap-2">
-                      <span className="text-xs sm:text-sm font-medium text-gray-500">BACK SIDE</span>
+                      <span className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400">BACK SIDE</span>
                       <div className="flex items-center gap-1 sm:gap-2 w-full sm:w-auto">
                         <button
                           onClick={() => setShowPreview({ ...showPreview, back: !showPreview.back })}
-                          className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg flex items-center gap-1 sm:gap-2 transition-colors text-xs sm:text-sm flex-1 sm:flex-initial"
+                          className="bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg flex items-center gap-1 sm:gap-2 transition-colors text-xs sm:text-sm flex-1 sm:flex-initial"
                           title="Toggle preview"
                         >
                           <span className="material-icons text-sm sm:text-base">{showPreview.back ? 'edit' : 'visibility'}</span>
@@ -859,7 +942,7 @@ const DeckPage = () => {
                       </div>
                     )}
                     {showPreview.back ? (
-                      <div className={`flex-grow border-2 border-gray-300 rounded-lg p-3 sm:p-6 text-gray-900 overflow-y-auto bg-gray-50 min-h-0 flex ${
+                      <div className={`flex-grow border-2 border-gray-300 dark:border-gray-600 rounded-lg p-3 sm:p-6 text-gray-900 dark:text-white overflow-y-auto bg-gray-50 dark:bg-gray-700 min-h-0 flex ${
                         editingCard.backVerticalAlign === 'top' ? 'items-start' :
                         editingCard.backVerticalAlign === 'bottom' ? 'items-end' : 'items-center'
                       } justify-center`}>
@@ -867,19 +950,19 @@ const DeckPage = () => {
                           {editingCard.back ? (
                             <SimpleMarkdown text={editingCard.back} invert={false} />
                           ) : (
-                            <p className="text-gray-400 italic">No content yet</p>
+                            <p className="text-gray-400 dark:text-gray-500 italic">No content yet</p>
                           )}
                         </div>
                       </div>
                     ) : (
-                      <div className="flex-grow border-2 border-gray-300 rounded-lg overflow-hidden min-h-0">
+                      <div className="flex-grow bg-gray-50 dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden min-h-0">
                         <textarea
                           id="textarea-back"
                           value={editingCard.back}
                           onChange={(e) => setEditingCard({ ...editingCard, back: e.target.value })}
                           onFocus={() => setActiveTextarea('back')}
                           placeholder="Enter the back of your card (answer, translation, etc.)"
-                          className={`w-full h-full bg-transparent px-3 sm:px-6 pb-3 sm:pb-6 text-gray-900 placeholder-gray-400 focus:outline-none focus:border-primary-500 resize-none ${
+                          className={`w-full h-full bg-transparent px-3 sm:px-6 pb-3 sm:pb-6 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-primary-500 resize-none ${
                             editingCard.backAlign === 'center' ? 'text-center' : editingCard.backAlign === 'right' ? 'text-right' : 'text-left'
                           }`}
                           style={{
@@ -899,7 +982,7 @@ const DeckPage = () => {
             {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 justify-center">
               <button
-                onClick={() => handleSaveCard(false)}
+                onClick={() => handleSaveCard(false, editingCardId !== null)}
                 disabled={savingCard || !editingCard.front.trim() || !editingCard.back.trim()}
                 className="btn-primary px-4 sm:px-8 py-2 sm:py-3 flex items-center justify-center gap-2 disabled:opacity-50 text-sm sm:text-base"
               >
@@ -949,8 +1032,8 @@ const DeckPage = () => {
   // Safety check - ensure deck exists before rendering
   if (!deck || !deck.name) {
     console.error('Deck is invalid:', deck);
-    return (
-      <div className="min-h-screen flex flex-col bg-gray-50">
+  return (
+    <div className="min-h-screen flex flex-col bg-gray-50">
         <Navbar />
         <div className="flex-grow flex items-center justify-center">
           <div className="text-center">
@@ -968,7 +1051,7 @@ const DeckPage = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors">
       <Navbar />
       
       <div className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -976,18 +1059,18 @@ const DeckPage = () => {
         <div className="mb-8">
             <button
               onClick={() => navigate('/dashboard')}
-            className="text-primary-600 hover:text-primary-700 mb-4 flex items-center gap-2"
+            className="text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 mb-4 flex items-center gap-2 transition-colors"
             >
             <span className="material-icons">arrow_back</span>
             Back to Dashboard
             </button>
           
-          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <div className="bg-gradient-to-r from-white to-blue-50 dark:from-gray-800 dark:to-gray-700 rounded-lg shadow-xl p-6 mb-6 border border-primary-200 dark:border-gray-600">
             <div className="flex items-start justify-between">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">{deck.name}</h1>
-                <p className="text-gray-600 mb-4">{deck.description}</p>
-                <div className="flex items-center gap-4 text-sm text-gray-500">
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">{deck.name}</h1>
+                <p className="text-gray-600 dark:text-gray-300 mb-4">{deck.description}</p>
+                <div className="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
                   <span className="flex items-center gap-1">
                     <span className="material-icons text-base">description</span>
                     {deck.cardCount || cards.length} cards
@@ -1016,161 +1099,84 @@ const DeckPage = () => {
         {deckMode === null && (
           <div>
             <div className="mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">What would you like to do?</h2>
-              <p className="text-gray-600">Choose an option to get started</p>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">What would you like to do?</h2>
+              <p className="text-gray-600 dark:text-gray-300">Choose an option to get started</p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
               {/* Add Cards */}
               <button
-                onClick={() => setDeckMode('add-cards')}
-                className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group"
+                onClick={handleAddCard}
+                className="bg-gradient-to-br from-primary-50 to-primary-100 dark:from-primary-900 dark:to-primary-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group border-2 border-primary-200 dark:border-primary-700"
               >
                 <div className="flex items-center gap-4 mb-3">
-                  <div className="bg-primary-100 rounded-lg p-3 group-hover:bg-primary-200 transition-colors">
-                    <span className="material-icons text-primary-600 text-3xl">add_circle</span>
+                  <div className="bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg p-3 group-hover:from-primary-600 group-hover:to-primary-700 transition-all shadow-md">
+                    <span className="material-icons text-white text-3xl">add_circle</span>
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900">Add Cards</h3>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">Add Cards</h3>
                 </div>
-                <p className="text-gray-600">Create new flashcards for your deck</p>
+                <p className="text-gray-600 dark:text-gray-300">Create new flashcards for your deck</p>
               </button>
 
               {/* Edit Cards */}
               <button
                 onClick={() => setDeckMode('edit-cards')}
-                className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group"
+                className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900 dark:to-blue-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group border-2 border-blue-200 dark:border-blue-700"
               >
                 <div className="flex items-center gap-4 mb-3">
-                  <div className="bg-blue-100 rounded-lg p-3 group-hover:bg-blue-200 transition-colors">
-                    <span className="material-icons text-blue-600 text-3xl">edit</span>
+                  <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-3 group-hover:from-blue-600 group-hover:to-blue-700 transition-all shadow-md">
+                    <span className="material-icons text-white text-3xl">edit</span>
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900">Edit Cards</h3>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">Edit Cards</h3>
                 </div>
-                <p className="text-gray-600">Modify existing cards in your deck</p>
+                <p className="text-gray-600 dark:text-gray-300">Modify existing cards in your deck</p>
               </button>
 
               {/* Practice */}
               <button
                 onClick={() => setDeckMode('practice')}
-                className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group"
+                className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900 dark:to-green-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group border-2 border-green-200 dark:border-green-700"
               >
                 <div className="flex items-center gap-4 mb-3">
-                  <div className="bg-green-100 rounded-lg p-3 group-hover:bg-green-200 transition-colors">
-                    <span className="material-icons text-green-600 text-3xl">school</span>
-                  </div>
-                  <h3 className="text-xl font-bold text-gray-900">Practice</h3>
-                </div>
-                <p className="text-gray-600">Study your flashcards with spaced repetition</p>
-              </button>
+                  <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-3 group-hover:from-green-600 group-hover:to-green-700 transition-all shadow-md">
+                    <span className="material-icons text-white text-3xl">school</span>
+            </div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">Practice</h3>
+          </div>
+                <p className="text-gray-600 dark:text-gray-300">Study your flashcards with spaced repetition</p>
+                </button>
 
               {/* AI Suggestions */}
-              <button
+                      <button
                 onClick={() => setDeckMode('ai-suggestions')}
-                className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group"
-              >
+                className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900 dark:to-purple-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group border-2 border-purple-200 dark:border-purple-700"
+                      >
                 <div className="flex items-center gap-4 mb-3">
-                  <div className="bg-purple-100 rounded-lg p-3 group-hover:bg-purple-200 transition-colors">
-                    <span className="material-icons text-purple-600 text-3xl">smart_toy</span>
-            </div>
-                  <h3 className="text-xl font-bold text-gray-900">AI Suggestions</h3>
-          </div>
-                <p className="text-gray-600">Get AI-powered card recommendations</p>
+                  <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-3 group-hover:from-purple-600 group-hover:to-purple-700 transition-all shadow-md">
+                    <span className="material-icons text-white text-3xl">smart_toy</span>
+                    </div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">AI Suggestions</h3>
+                      </div>
+                <p className="text-gray-600 dark:text-gray-300">Get AI-powered card recommendations</p>
               </button>
 
               {/* Game Modes */}
               <button
                 onClick={() => setDeckMode('game-modes')}
-                className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group"
+                className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900 dark:to-orange-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group border-2 border-orange-200 dark:border-orange-700"
               >
                 <div className="flex items-center gap-4 mb-3">
-                  <div className="bg-orange-100 rounded-lg p-3 group-hover:bg-orange-200 transition-colors">
-                    <span className="material-icons text-orange-600 text-3xl">sports_esports</span>
-        </div>
-                  <h3 className="text-xl font-bold text-gray-900">Game Modes</h3>
-                </div>
-                <p className="text-gray-600">Learn through fun interactive games</p>
+                  <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg p-3 group-hover:from-orange-600 group-hover:to-orange-700 transition-all shadow-md">
+                    <span className="material-icons text-white text-3xl">sports_esports</span>
+                      </div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">Game Modes</h3>
+                    </div>
+                <p className="text-gray-600 dark:text-gray-300">Learn through fun interactive games</p>
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* Mode Content */}
-        {deckMode === 'add-cards' && (
-          <div>
-            <div className="mb-6 flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => setDeckMode(null)}
-                  className="text-gray-600 hover:text-gray-900"
-                  title="Back to options"
-                >
-                  <span className="material-icons text-2xl">arrow_back</span>
-                </button>
-                <h2 className="text-xl font-semibold">Add Cards ({cards.length})</h2>
-              </div>
-              <button onClick={handleAddCard} className="btn-primary flex items-center gap-2">
-                <span className="material-icons">add</span>
-                Add Card
-                </button>
-            </div>
-
-            {loadingCards ? (
-              <div className="bg-white rounded-lg shadow p-12 text-center">
-                <span className="material-icons text-6xl text-gray-400 mb-4 animate-spin">refresh</span>
-                <p className="text-gray-600">Loading cards...</p>
-              </div>
-            ) : cards.length === 0 ? (
-              <div className="bg-white rounded-lg shadow p-12 text-center">
-                <span className="material-icons text-6xl text-gray-400 mb-4">description</span>
-                <h3 className="text-xl font-semibold mb-2">No cards yet</h3>
-                <p className="text-gray-600 mb-6">Add your first card to get started</p>
-                <button onClick={handleAddCard} className="btn-primary">
-                  Add Your First Card
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {cards.map((card, index) => {
-                  if (!card) {
-                    console.warn('Null card at index', index);
-                    return null;
-                  }
-                  // Always extract string content, never render objects
-                  const frontContent = typeof card.front === 'string' 
-                    ? card.front 
-                    : (card.front?.content || 'Empty');
-                  const backContent = typeof card.back === 'string' 
-                    ? card.back 
-                    : (card.back?.content || 'Empty');
-                  return (
-                    <div key={card.id || index} className="bg-white rounded-lg shadow p-4 hover:shadow-md transition-shadow">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
-                      <button
-                        onClick={() => handleDeleteCard(card.id)}
-                        className="text-red-500 hover:text-red-700"
-                        title="Delete card"
-                      >
-                        <span className="material-icons text-base">delete</span>
-                      </button>
-                    </div>
-                    <div className="space-y-2">
-                      <div>
-                        <p className="text-xs text-gray-500 mb-1">Front</p>
-                          <p className="font-medium">{frontContent}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500 mb-1">Back</p>
-                          <p className="text-gray-700">{backContent}</p>
-                      </div>
-                    </div>
                   </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         )}
+
 
         {deckMode === 'edit-cards' && (
           <div>
@@ -1191,57 +1197,73 @@ const DeckPage = () => {
               </button>
             </div>
 
-            {cards.length === 0 ? (
-              <div className="bg-white rounded-lg shadow p-12 text-center">
-                <span className="material-icons text-6xl text-gray-400 mb-4">edit</span>
-                <h3 className="text-xl font-semibold mb-2">No cards to edit</h3>
-                <p className="text-gray-600 mb-6">Add a card to start editing</p>
+            {loadingCards ? (
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center">
+                <span className="material-icons text-6xl text-gray-400 dark:text-gray-500 mb-4 animate-spin">refresh</span>
+                <p className="text-gray-600 dark:text-gray-300">Loading cards...</p>
+              </div>
+            ) : cards.length === 0 ? (
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center">
+                <span className="material-icons text-6xl text-gray-400 dark:text-gray-500 mb-4">edit</span>
+                <h3 className="text-xl font-semibold mb-2 dark:text-white">No cards to edit</h3>
+                <p className="text-gray-600 dark:text-gray-300 mb-6">Add a card to start editing</p>
                 <button onClick={handleAddCard} className="btn-primary">
                   Add Your First Card
                 </button>
               </div>
             ) : (
-              <div className="space-y-4">
-                {cards.map((card, index) => (
-                  <div key={card.id} className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="font-semibold">Card #{index + 1}</h3>
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gradient-to-r from-primary-500 to-primary-600 dark:from-primary-700 dark:to-primary-800">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">#</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Front</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Back</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                      {cards.map((card, index) => {
+                        const frontContent = typeof card.front === 'string' ? card.front : (card.front?.content || '');
+                        const backContent = typeof card.back === 'string' ? card.back : (card.back?.content || '');
+                        return (
+                          <tr 
+                            key={card.id} 
+                            onClick={() => handleEditCard(card)}
+                            className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+                          >
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
+                              {index + 1}
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm text-gray-900 dark:text-white">
+                                {frontContent || <span className="text-gray-400 dark:text-gray-500 italic">Empty</span>}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm text-gray-700 dark:text-gray-300">
+                                {backContent || <span className="text-gray-400 dark:text-gray-500 italic">Empty</span>}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <button
-                        onClick={() => handleDeleteCard(card.id)}
-                        className="btn-danger text-sm"
-                      >
-                        <span className="material-icons text-base mr-1">delete</span>
-                        Delete
+                                onClick={(e) => {
+                                  e.stopPropagation(); // Prevent row click when clicking delete
+                                  handleDeleteCard(card.id);
+                                }}
+                                className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition-colors"
+                                title="Delete card"
+                              >
+                                <span className="material-icons">delete</span>
                       </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Front
-                        </label>
-                        <input
-                          type="text"
-                          value={typeof card.front === 'string' ? card.front : (card.front?.content || '')}
-                          onChange={(e) => handleUpdateCard(card.id, 'front', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                          placeholder="Question or word"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Back
-                        </label>
-                        <input
-                          type="text"
-                          value={typeof card.back === 'string' ? card.back : (card.back?.content || '')}
-                          onChange={(e) => handleUpdateCard(card.id, 'back', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                          placeholder="Answer or translation"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
@@ -1254,53 +1276,53 @@ const DeckPage = () => {
                 <div className="mb-6 flex items-center gap-4">
                   <button
                     onClick={() => { setDeckMode(null); setReviewMode(false); }}
-                    className="text-gray-600 hover:text-gray-900"
+                    className="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                     title="Back to options"
                   >
                     <span className="material-icons text-2xl">arrow_back</span>
                   </button>
-                  <h2 className="text-xl font-semibold">Choose a Study Mode</h2>
+                  <h2 className="text-xl font-semibold dark:text-white">Choose a Study Mode</h2>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {/* Flashcard Mode */}
-                  <div className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 cursor-pointer" onClick={handleStartReview}>
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 cursor-pointer border border-gray-200 dark:border-gray-700" onClick={handleStartReview}>
                     <div className="flex items-center gap-3 mb-3">
-                      <div className="bg-blue-100 rounded-lg p-3">
-                        <span className="material-icons text-blue-600 text-3xl">style</span>
+                      <div className="bg-blue-100 dark:bg-blue-900 rounded-lg p-3">
+                        <span className="material-icons text-blue-600 dark:text-blue-400 text-3xl">style</span>
                       </div>
-                      <h3 className="text-lg font-semibold">Flashcard Review</h3>
+                      <h3 className="text-lg font-semibold dark:text-white">Flashcard Review</h3>
                     </div>
-                    <p className="text-gray-600 text-sm">Review all cards in the deck, flip to see answers</p>
+                    <p className="text-gray-600 dark:text-gray-300 text-sm">Review all cards in the deck, flip to see answers</p>
                   </div>
 
                   {/* Test Mode */}
-                  <div className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all opacity-75">
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all opacity-75 border border-gray-200 dark:border-gray-700">
                     <div className="flex items-center gap-3 mb-3">
-                      <div className="bg-green-100 rounded-lg p-3">
-                        <span className="material-icons text-green-600 text-3xl">quiz</span>
+                      <div className="bg-green-100 dark:bg-green-900 rounded-lg p-3">
+                        <span className="material-icons text-green-600 dark:text-green-400 text-3xl">quiz</span>
                       </div>
-                      <h3 className="text-lg font-semibold">Test Mode</h3>
+                      <h3 className="text-lg font-semibold dark:text-white">Test Mode</h3>
                     </div>
-                    <p className="text-gray-600 text-sm">Coming soon: Test your knowledge with typing</p>
+                    <p className="text-gray-600 dark:text-gray-300 text-sm">Coming soon: Test your knowledge with typing</p>
                   </div>
 
                   {/* Match Mode */}
-                  <div className="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition-all opacity-75">
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all opacity-75 border border-gray-200 dark:border-gray-700">
                     <div className="flex items-center gap-3 mb-3">
-                      <div className="bg-purple-100 rounded-lg p-3">
-                        <span className="material-icons text-purple-600 text-3xl">group_work</span>
+                      <div className="bg-purple-100 dark:bg-purple-900 rounded-lg p-3">
+                        <span className="material-icons text-purple-600 dark:text-purple-400 text-3xl">group_work</span>
                       </div>
-                      <h3 className="text-lg font-semibold">Match Game</h3>
+                      <h3 className="text-lg font-semibold dark:text-white">Match Game</h3>
                     </div>
-                    <p className="text-gray-600 text-sm">Coming soon: Match questions with answers</p>
+                    <p className="text-gray-600 dark:text-gray-300 text-sm">Coming soon: Match questions with answers</p>
                   </div>
                 </div>
               </div>
             ) : (
               <div className="max-w-2xl mx-auto">
-                <div className="bg-white rounded-lg shadow-lg p-8">
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 border border-gray-200 dark:border-gray-700">
                   <div className="text-center mb-6">
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-600 dark:text-gray-300">
                       Card {currentCardIndex + 1} of {cards.length}
                     </p>
                   </div>
@@ -1312,8 +1334,8 @@ const DeckPage = () => {
                     onFlip={handleFlip}
                   />
                   ) : (
-                    <div className="bg-white rounded-lg shadow-lg p-12 text-center">
-                      <p className="text-gray-600">No card available</p>
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center border border-gray-200 dark:border-gray-700">
+                      <p className="text-gray-600 dark:text-gray-300">No card available</p>
                       <button 
                         onClick={() => {
                           setReviewMode(false);
@@ -1330,21 +1352,21 @@ const DeckPage = () => {
                   <div className="mt-8 flex justify-center gap-4">
                     <button
                       onClick={() => handleAnswer('hard')}
-                      className="px-6 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-2"
+                      className="px-6 py-3 bg-red-500 dark:bg-red-600 text-white rounded-lg hover:bg-red-600 dark:hover:bg-red-700 transition-colors flex items-center gap-2"
                     >
                       <span className="material-icons">sentiment_very_dissatisfied</span>
                       Hard
                     </button>
                     <button
                       onClick={() => handleAnswer('medium')}
-                      className="px-6 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center gap-2"
+                      className="px-6 py-3 bg-yellow-500 dark:bg-yellow-600 text-white rounded-lg hover:bg-yellow-600 dark:hover:bg-yellow-700 transition-colors flex items-center gap-2"
                     >
                       <span className="material-icons">sentiment_neutral</span>
                       Unknown
                     </button>
                     <button
                       onClick={() => handleAnswer('easy')}
-                      className="px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+                      className="px-6 py-3 bg-green-500 dark:bg-green-600 text-white rounded-lg hover:bg-green-600 dark:hover:bg-green-700 transition-colors flex items-center gap-2"
                     >
                       <span className="material-icons">sentiment_very_satisfied</span>
                       Known
@@ -1372,18 +1394,18 @@ const DeckPage = () => {
             <div className="mb-6 flex items-center gap-4">
               <button
                 onClick={() => setDeckMode(null)}
-                className="text-gray-600 hover:text-gray-900"
+                className="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                 title="Back to options"
               >
                 <span className="material-icons text-2xl">arrow_back</span>
               </button>
-              <h2 className="text-xl font-semibold">Game Modes</h2>
+              <h2 className="text-xl font-semibold dark:text-white">Game Modes</h2>
       </div>
-            <div className="bg-white rounded-lg shadow-lg p-12 text-center">
-              <span className="material-icons text-6xl text-orange-400 mb-4">sports_esports</span>
-              <h3 className="text-2xl font-semibold mb-2">Game Modes Coming Soon!</h3>
-              <p className="text-gray-600 mb-6">Learn through fun interactive games</p>
-              <p className="text-sm text-gray-500">Multiple game modes will be available soon to make learning more engaging</p>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center border border-gray-200 dark:border-gray-700">
+              <span className="material-icons text-6xl text-orange-400 dark:text-orange-500 mb-4">sports_esports</span>
+              <h3 className="text-2xl font-semibold mb-2 dark:text-white">Game Modes Coming Soon!</h3>
+              <p className="text-gray-600 dark:text-gray-300 mb-6">Learn through fun interactive games</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Multiple game modes will be available soon to make learning more engaging</p>
             </div>
           </div>
         )}
@@ -1459,19 +1481,19 @@ const AISuggestionsView = ({ deckId, deck, onBack, onCardAdded }) => {
       <div className="mb-6 flex items-center gap-4">
         <button
           onClick={onBack}
-          className="text-gray-600 hover:text-gray-900"
+          className="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
           title="Back to options"
         >
           <span className="material-icons text-2xl">arrow_back</span>
         </button>
-        <h2 className="text-xl font-semibold">AI Suggestions</h2>
+        <h2 className="text-xl font-semibold dark:text-white">AI Suggestions</h2>
       </div>
 
-      <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Get AI-Powered Card Suggestions</h3>
-            <p className="text-gray-600 text-sm">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Get AI-Powered Card Suggestions</h3>
+            <p className="text-gray-600 dark:text-gray-300 text-sm">
               AI will analyze your deck "{deck?.name}" ({deck?.language}) and suggest relevant flashcards.
             </p>
           </div>
@@ -1495,12 +1517,12 @@ const AISuggestionsView = ({ deckId, deck, onBack, onCardAdded }) => {
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-            <div className="flex items-center gap-2 text-red-800">
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
+            <div className="flex items-center gap-2 text-red-800 dark:text-red-300">
               <span className="material-icons">error</span>
               <p className="font-medium">Error: {error}</p>
             </div>
-            <p className="text-sm text-red-600 mt-2">
+            <p className="text-sm text-red-600 dark:text-red-400 mt-2">
               Make sure your server has GITHUB_TOKEN set in the .env file. You can get a GitHub token from:
               <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline ml-1">
                 GitHub Settings → Developer settings → Personal access tokens
@@ -1512,18 +1534,18 @@ const AISuggestionsView = ({ deckId, deck, onBack, onCardAdded }) => {
 
       {suggestions.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">Suggested Cards ({suggestions.length})</h3>
+          <h3 className="text-lg font-semibold mb-4 dark:text-white">Suggested Cards ({suggestions.length})</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {suggestions.map((suggestion, index) => (
-              <div key={index} className="bg-white rounded-lg shadow p-6 hover:shadow-md transition-shadow">
+              <div key={index} className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 hover:shadow-md transition-shadow border border-gray-200 dark:border-gray-700">
                 <div className="mb-4">
                   <div className="mb-3">
-                    <p className="text-xs text-gray-500 mb-1">Front</p>
-                    <p className="font-semibold text-gray-900">{suggestion.front}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Front</p>
+                    <p className="font-semibold text-gray-900 dark:text-white">{suggestion.front}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500 mb-1">Back</p>
-                    <p className="text-gray-700">{suggestion.back}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Back</p>
+                    <p className="text-gray-700 dark:text-gray-300">{suggestion.back}</p>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -1559,10 +1581,10 @@ const AISuggestionsView = ({ deckId, deck, onBack, onCardAdded }) => {
       )}
 
       {suggestions.length === 0 && !loading && !error && (
-        <div className="bg-white rounded-lg shadow-lg p-12 text-center">
-          <span className="material-icons text-6xl text-purple-400 mb-4">smart_toy</span>
-          <h3 className="text-xl font-semibold mb-2">Get Started with AI Suggestions</h3>
-          <p className="text-gray-600 mb-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center border border-gray-200 dark:border-gray-700">
+          <span className="material-icons text-6xl text-purple-400 dark:text-purple-500 mb-4">smart_toy</span>
+          <h3 className="text-xl font-semibold mb-2 dark:text-white">Get Started with AI Suggestions</h3>
+          <p className="text-gray-600 dark:text-gray-300 mb-6">
             Click "Get Suggestions" to receive AI-powered flashcard recommendations based on your deck
           </p>
         </div>
