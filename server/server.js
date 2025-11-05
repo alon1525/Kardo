@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { getAISuggestions, getCardExplanation } from './ai-service.js';
 import { reviewCard } from './srs-algorithm.js';
+import { getDefaultSettings, validateSettings, parseLearningSteps } from './user-settings.js';
 
 dotenv.config();
 
@@ -19,12 +20,28 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL.includes('supabase.co') ? {
     rejectUnauthorized: false
-  } : false
+  } : false,
+  // Connection pool settings
+  max: 20, // Maximum number of clients in the pool
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection cannot be established
+});
+
+// Handle pool errors gracefully (don't crash the server)
+pool.on('error', (err, client) => {
+  console.error('Unexpected error on idle client:', err);
+  // Don't crash - just log the error
+});
+
+pool.on('connect', (client) => {
+  console.log('New database client connected');
 });
 
 pool.connect((err, client, release) => {
   if (err) {
-    console.error('Database connection failed:', err);
+    console.error('Database connection failed:', err.message);
+    console.error('Error code:', err.code);
+    // Don't crash - server will continue but database operations may fail
     return;
   }
   console.log('Connected to PostgreSQL database (Supabase)');
@@ -369,48 +386,53 @@ app.get('/api/decks/:deckId/due-cards', async (req, res) => {
       return res.json([]);
     }
     
-    // Get cards in priority order: Due (red) → Learning (green) → New (blue)
-    // Priority 0: Due cards (due_date <= now()) - includes both review cards and learning cards that are due
-    // Priority 1: Learning cards (interval < 1 day, has been reviewed, not due yet)
-    // Priority 2: New cards (no user_progress OR never reviewed)
-    const result = await pool.query(
-      `SELECT 
-        c.id,
-        c.deck_id,
-        c.front,
-        c.back,
-        c.difficulty,
-        c.hint,
-        COALESCE(up.interval::FLOAT, 0) as interval,
-        COALESCE(up.ease_factor, 2.5) as ease_factor,
-        COALESCE(up.repetitions, 0) as repetitions,
-        COALESCE(up.due_date, CURRENT_TIMESTAMP) as due_date,
-        up.last_review,
-        CASE 
-          WHEN up.user_id IS NULL THEN true 
-          WHEN up.repetitions = 0 AND up.last_review IS NULL THEN true
-          ELSE false 
-        END as is_new,
-        CASE 
-          WHEN up.user_id IS NULL THEN 2  -- New cards (priority 2)
-          WHEN up.repetitions = 0 AND up.last_review IS NULL THEN 2  -- New cards (never reviewed)
-          WHEN up.due_date <= CURRENT_TIMESTAMP THEN 0  -- Due cards (priority 0) - includes learning cards that are due
-          WHEN up.interval < 1 AND up.last_review IS NOT NULL THEN 1  -- Learning cards not yet due (priority 1)
-          ELSE 3  -- Other cards (shouldn't appear)
-        END as priority
-      FROM cards c
-      LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
-      WHERE c.deck_id = $2
-        AND (
-          up.user_id IS NULL  -- New cards
-          OR (up.repetitions = 0 AND up.last_review IS NULL)  -- New cards (initialized but never reviewed)
-          OR up.due_date <= CURRENT_TIMESTAMP  -- Due cards (includes learning cards that are due)
-          OR (up.interval < 1 AND up.due_date > CURRENT_TIMESTAMP AND up.last_review IS NOT NULL)  -- Learning cards not yet due
-        )
-      ORDER BY priority ASC, up.due_date ASC NULLS FIRST, c.id ASC
-      LIMIT 50`,
-      [userId, deckId]
-    );
+            // Get cards in priority order: Due (red) → Learning (green) → New (blue)
+            // Priority 0: Due cards (due_date <= now()) - REVIEW cards and learning cards that are DUE
+            // Priority 1: Learning cards (interval < 1 day, has been reviewed, NOT due yet)
+            // Priority 2: New cards (no user_progress OR never reviewed) - SEPARATE from due cards
+            const result = await pool.query(
+              `SELECT 
+                c.id,
+                c.deck_id,
+                c.front,
+                c.back,
+                c.difficulty,
+                c.hint,
+                COALESCE(up.interval::FLOAT, 0) as interval,
+                COALESCE(up.ease_factor, 2.5) as ease_factor,
+                COALESCE(up.repetitions, 0) as repetitions,
+                COALESCE(up.due_date, CURRENT_TIMESTAMP) as due_date,
+                up.last_review,
+                up.learning_step,
+                CASE 
+                  WHEN up.user_id IS NULL THEN true 
+                  WHEN up.repetitions = 0 AND up.last_review IS NULL THEN true
+                  ELSE false 
+                END as is_new,
+                CASE 
+                  WHEN up.user_id IS NULL THEN 0  -- New cards (priority 0 - FIRST)
+                  WHEN up.repetitions = 0 THEN 0  -- New cards (priority 0 - FIRST)
+                  WHEN up.due_date <= CURRENT_TIMESTAMP AND up.repetitions != 0 THEN 1  -- Due cards (priority 1)
+                  WHEN up.due_date > CURRENT_TIMESTAMP 
+                    AND EXTRACT(EPOCH FROM (up.due_date - CURRENT_TIMESTAMP)) / 86400.0 <= 60 
+                    AND up.repetitions != 0 THEN 2  -- Review cards (priority 2)
+                  ELSE 3  -- Other cards (mature or shouldn't appear)
+                END as priority
+              FROM cards c
+              LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+              WHERE c.deck_id = $2
+                AND (
+                  up.user_id IS NULL  -- New cards (no progress)
+                  OR up.repetitions = 0  -- New cards (never reviewed)
+                  OR (up.due_date <= CURRENT_TIMESTAMP AND up.repetitions != 0)  -- Due cards
+                  OR (up.due_date > CURRENT_TIMESTAMP 
+                      AND EXTRACT(EPOCH FROM (up.due_date - CURRENT_TIMESTAMP)) / 86400.0 <= 60 
+                      AND up.repetitions != 0)  -- Review cards (due in <= 60 days)
+                )
+              ORDER BY priority ASC, up.due_date ASC NULLS FIRST, c.id ASC
+              LIMIT 50`,
+              [userId, deckId]
+            );
     
     const newCardsCount = result.rows.filter(r => r.is_new).length;
     console.log(`Found ${result.rows.length} due cards for user ${userId} in deck ${deckId}`);
@@ -418,21 +440,22 @@ app.get('/api/decks/:deckId/due-cards', async (req, res) => {
     console.log(`  - New cards (no progress): ${newCardsCount}`);
     console.log(`  - Cards with progress: ${result.rows.length - newCardsCount}`);
     
-    const cards = result.rows.map(row => ({
-      id: row.id,
-      deck_id: row.deck_id,
-      front: typeof row.front === 'string' ? JSON.parse(row.front) : row.front,
-      back: typeof row.back === 'string' ? JSON.parse(row.back) : row.back,
-      difficulty: row.difficulty,
-      hint: row.hint,
-      progress: {
-        interval: parseFloat(row.interval) || 0,
-        ease_factor: parseFloat(row.ease_factor),
-        repetitions: row.repetitions,
-        due_date: row.due_date,
-        last_review: row.last_review
-      }
-    }));
+            const cards = result.rows.map(row => ({
+              id: row.id,
+              deck_id: row.deck_id,
+              front: typeof row.front === 'string' ? JSON.parse(row.front) : row.front,
+              back: typeof row.back === 'string' ? JSON.parse(row.back) : row.back,
+              difficulty: row.difficulty,
+              hint: row.hint,
+              progress: {
+                interval: parseFloat(row.interval) || 0,
+                ease_factor: parseFloat(row.ease_factor),
+                repetitions: row.repetitions,
+                due_date: row.due_date,
+                last_review: row.last_review,
+                learning_step: row.learning_step !== null && row.learning_step !== undefined ? row.learning_step : undefined
+              }
+            }));
     
     res.json(cards);
   } catch (err) {
@@ -469,17 +492,32 @@ app.post('/api/cards/:cardId/review', async (req, res) => {
         ease_factor: parseFloat(row.ease_factor),
         repetitions: row.repetitions,
         due_date: row.due_date,
-        last_review: row.last_review
+        last_review: row.last_review,
+        learning_step: row.learning_step !== null ? row.learning_step : undefined
       };
     }
     
-    // Apply SRS algorithm
-    const updatedProgress = reviewCard(currentProgress, grade);
+    // Get user settings (or use defaults)
+    let userSettings = null;
+    try {
+      const settingsResult = await pool.query(
+        'SELECT * FROM user_settings WHERE user_id::text = $1::text',
+        [userId]
+      );
+      if (settingsResult.rows.length > 0) {
+        userSettings = settingsResult.rows[0];
+      }
+    } catch (settingsError) {
+      console.warn('Error fetching user settings, using defaults:', settingsError);
+    }
     
-    // Insert or update progress
+    // Apply SRS algorithm with user settings
+    const updatedProgress = reviewCard(currentProgress, grade, userSettings);
+    
+    // Insert or update progress (including learning_step)
     await pool.query(
-      `INSERT INTO user_progress (user_id, card_id, interval, ease_factor, repetitions, due_date, last_review)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO user_progress (user_id, card_id, interval, ease_factor, repetitions, due_date, last_review, learning_step)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id, card_id)
        DO UPDATE SET
          interval = EXCLUDED.interval,
@@ -487,15 +525,17 @@ app.post('/api/cards/:cardId/review', async (req, res) => {
          repetitions = EXCLUDED.repetitions,
          due_date = EXCLUDED.due_date,
          last_review = EXCLUDED.last_review,
+         learning_step = EXCLUDED.learning_step,
          updated_at = CURRENT_TIMESTAMP`,
       [
         userId,
         cardId,
-        parseFloat(updatedProgress.interval), // Ensure it's a number, not a string
+        parseFloat(updatedProgress.interval),
         updatedProgress.ease_factor,
         updatedProgress.repetitions,
         updatedProgress.due_date,
-        updatedProgress.last_review
+        updatedProgress.last_review,
+        updatedProgress.learning_step !== undefined ? updatedProgress.learning_step : null
       ]
     );
     
@@ -530,31 +570,47 @@ app.post('/api/decks/:deckId/init-progress', async (req, res) => {
     
     console.log(`Initializing progress for ${cardsResult.rows.length} cards for user ${userId} in deck ${deckId}`);
     
+    // Get user settings for default ease factor
+    let defaultEaseFactor = 2.5;
+    try {
+      const settingsResult = await pool.query(
+        'SELECT starting_ease_factor FROM user_settings WHERE user_id::text = $1::text',
+        [userId]
+      );
+      if (settingsResult.rows.length > 0) {
+        defaultEaseFactor = parseFloat(settingsResult.rows[0].starting_ease_factor) || 2.5;
+      }
+    } catch (settingsError) {
+      // Use default
+    }
+    
     // Initialize progress for each card (due immediately, but NOT reviewed yet)
     // Setting last_review to NULL ensures cards are still counted as "new" until first review
     const now = new Date();
     const initialProgress = {
       interval: 0,
-      ease_factor: 2.5,
+      ease_factor: defaultEaseFactor,
       repetitions: 0,
       due_date: now,
-      last_review: null  // NULL means card hasn't been reviewed yet (still "new")
+      last_review: null,  // NULL means card hasn't been reviewed yet (still "new")
+      learning_step: 0   // Start at first learning step (index 0)
     };
     
     for (const card of cardsResult.rows) {
       try {
         await pool.query(
-          `INSERT INTO user_progress (user_id, card_id, interval, ease_factor, repetitions, due_date, last_review)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `INSERT INTO user_progress (user_id, card_id, interval, ease_factor, repetitions, due_date, last_review, learning_step)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (user_id, card_id) DO NOTHING`,
           [
             userId,
             card.id,
-            parseFloat(initialProgress.interval), // Ensure it's a number
+            parseFloat(initialProgress.interval),
             initialProgress.ease_factor,
             initialProgress.repetitions,
             initialProgress.due_date,
-            initialProgress.last_review
+            initialProgress.last_review,
+            initialProgress.learning_step
           ]
         );
       } catch (insertErr) {
@@ -595,69 +651,72 @@ app.get('/api/decks/:deckId/statistics', async (req, res) => {
         new: 0,
         learning: 0,
         due: 0,
+        review: 0,
+        mature: 0,
         total: 0
       });
     }
     
-    // Count new cards: no user_progress OR has progress but never reviewed (repetitions = 0 and no last_review)
+    // NEW = repetitions = 0
     const newCardsResult = await pool.query(
       `SELECT COUNT(*) as count
        FROM cards c
        LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
        WHERE c.deck_id = $2 
-         AND (up.user_id IS NULL 
-              OR (up.repetitions = 0 AND up.last_review IS NULL))`,
+         AND (up.user_id IS NULL OR up.repetitions = 0)`,
       [userId, deckId]
     );
     const newCards = parseInt(newCardsResult.rows[0]?.count || 0);
     
-    // Count learning/green cards: interval < 1 day, has been reviewed at least once
-    // Learning cards are cards that have been reviewed but are still in the learning phase
-    // Include cards where due_date <= now() so they appear immediately (they're due)
-    const learningCardsResult = await pool.query(
-      `SELECT COUNT(*) as count
-       FROM cards c
-       INNER JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
-       WHERE c.deck_id = $2 
-         AND up.interval < 1
-         AND up.last_review IS NOT NULL`,
-      [userId, deckId]
-    );
-    const learningCards = parseInt(learningCardsResult.rows[0]?.count || 0);
-    
-    // Count due cards: due_date <= now() (includes both review cards and learning cards that are due)
-    // This is the "red" count - cards that need to be reviewed now
+    // DUE = due_date <= now() AND repetitions != 0
     const dueCardsResult = await pool.query(
       `SELECT COUNT(*) as count
        FROM cards c
-       LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       INNER JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
        WHERE c.deck_id = $2
-         AND (up.user_id IS NULL OR up.due_date <= CURRENT_TIMESTAMP)`,
+         AND up.due_date <= CURRENT_TIMESTAMP
+         AND up.repetitions != 0`,
       [userId, deckId]
     );
     const dueCards = parseInt(dueCardsResult.rows[0]?.count || 0);
     
-    // Count mature cards: interval >= 1 day and due_date > now() (review cards not due yet)
+    // Review = due_date > now() AND (due_date - now()) <= 60 days AND repetitions != 0
+    // Cards that are due in the next 60 days (but not due yet)
+    const reviewCardsResult = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM cards c
+       INNER JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       WHERE c.deck_id = $2
+         AND up.due_date > CURRENT_TIMESTAMP
+         AND EXTRACT(EPOCH FROM (up.due_date - CURRENT_TIMESTAMP)) / 86400.0 <= 60
+         AND up.repetitions != 0`,
+      [userId, deckId]
+    );
+    const reviewCards = parseInt(reviewCardsResult.rows[0]?.count || 0);
+    
+    // Mature = due_date > now() AND (due_date - now()) >= 60 days AND repetitions != 0
+    // Cards that are due in 60+ days
     const matureCardsResult = await pool.query(
       `SELECT COUNT(*) as count
        FROM cards c
        INNER JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
        WHERE c.deck_id = $2
-         AND up.interval >= 1
-         AND up.due_date > CURRENT_TIMESTAMP`,
+         AND up.due_date > CURRENT_TIMESTAMP
+         AND EXTRACT(EPOCH FROM (up.due_date - CURRENT_TIMESTAMP)) / 86400.0 >= 60
+         AND up.repetitions != 0`,
       [userId, deckId]
     );
     const matureCards = parseInt(matureCardsResult.rows[0]?.count || 0);
     
-    // Verify: new + learning + due + mature should equal total
-    const accountedFor = newCards + learningCards + dueCards + matureCards;
+    // Verify: new + due + review + mature should equal total
+    const accountedFor = newCards + dueCards + reviewCards + matureCards;
     const unaccounted = totalCards - accountedFor;
     
     console.log(`Deck ${deckId} statistics for user ${userId}:`);
-    console.log(`  - New: ${newCards}`);
-    console.log(`  - Learning: ${learningCards}`);
-    console.log(`  - Due: ${dueCards}`);
-    console.log(`  - Mature: ${matureCards}`);
+    console.log(`  - New (repetitions=0): ${newCards}`);
+    console.log(`  - Due (due_date <= now): ${dueCards}`);
+    console.log(`  - Review/Learning (due in <= 60 days): ${reviewCards}`);
+    console.log(`  - Mature (due in >= 60 days): ${matureCards}`);
     console.log(`  - Total: ${totalCards}`);
     console.log(`  - Accounted for: ${accountedFor}`);
     if (unaccounted > 0) {
@@ -666,14 +725,96 @@ app.get('/api/decks/:deckId/statistics', async (req, res) => {
     
     res.json({
       new: newCards,
-      learning: learningCards,
+      learning: reviewCards, // Keep "learning" for backward compatibility
       due: dueCards,
+      review: reviewCards,
       mature: matureCards,
       total: totalCards
     });
   } catch (err) {
     console.error('Error fetching deck statistics:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Get user settings
+app.get('/api/users/:userId/settings', async (req, res) => {
+  const userId = req.params.userId;
+  
+  try {
+    const result = await pool.query(
+      'SELECT * FROM user_settings WHERE user_id::text = $1::text',
+      [userId]
+    );
+    
+    if (result.rows.length > 0) {
+      res.json(result.rows[0]);
+    } else {
+      // Return default settings if none exist
+      res.json(getDefaultSettings());
+    }
+  } catch (err) {
+    console.error('Error fetching user settings:', err);
+    // If table doesn't exist, return defaults
+    if (err.message && err.message.includes('does not exist')) {
+      res.json(getDefaultSettings());
+    } else {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
+// Update user settings
+app.put('/api/users/:userId/settings', async (req, res) => {
+  const userId = req.params.userId;
+  const settings = req.body;
+  
+  try {
+    // Validate and sanitize settings
+    const validatedSettings = validateSettings(settings);
+    validatedSettings.user_id = userId;
+    
+    // Insert or update
+    await pool.query(
+      `INSERT INTO user_settings (
+        user_id, max_interval, starting_ease_factor, easy_bonus, 
+        interval_modifier, hard_interval_factor, new_cards_per_day, learning_steps
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        max_interval = EXCLUDED.max_interval,
+        starting_ease_factor = EXCLUDED.starting_ease_factor,
+        easy_bonus = EXCLUDED.easy_bonus,
+        interval_modifier = EXCLUDED.interval_modifier,
+        hard_interval_factor = EXCLUDED.hard_interval_factor,
+        new_cards_per_day = EXCLUDED.new_cards_per_day,
+        learning_steps = EXCLUDED.learning_steps,
+        updated_at = CURRENT_TIMESTAMP`,
+      [
+        validatedSettings.user_id,
+        validatedSettings.max_interval,
+        validatedSettings.starting_ease_factor,
+        validatedSettings.easy_bonus,
+        validatedSettings.interval_modifier,
+        validatedSettings.hard_interval_factor,
+        validatedSettings.new_cards_per_day,
+        validatedSettings.learning_steps
+      ]
+    );
+    
+    res.json({ message: 'Settings updated successfully', settings: validatedSettings });
+  } catch (err) {
+    console.error('Error updating user settings:', err);
+    // If table doesn't exist, return error with migration hint
+    if (err.message && err.message.includes('does not exist')) {
+      res.status(500).json({ 
+        error: 'Database migration required',
+        message: 'Please run: database/run_migration_learning_steps.sql'
+      });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
@@ -872,6 +1013,7 @@ app.post('/api/cards/explain', async (req, res) => {
   }
 });
 
+// Start server
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   if (process.env.GITHUB_TOKEN) {
@@ -879,6 +1021,23 @@ app.listen(PORT, () => {
   } else {
     console.log('AI Suggestions: Disabled (GITHUB_TOKEN not set)');
   }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  pool.end(() => {
+    console.log('Database pool closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT signal received: closing HTTP server');
+  pool.end(() => {
+    console.log('Database pool closed');
+    process.exit(0);
+  });
 });
 
 

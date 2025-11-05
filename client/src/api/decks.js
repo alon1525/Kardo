@@ -442,3 +442,41 @@ export const getDeckStatistics = async (deckId, userId) => {
   }
 };
 
+// Get user settings
+export const getUserSettings = async (userId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/users/${userId}/settings`);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to get user settings');
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error getting user settings:', error);
+    throw error;
+  }
+};
+
+// Update user settings
+export const updateUserSettings = async (userId, settings) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/users/${userId}/settings`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to update user settings');
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating user settings:', error);
+    throw error;
+  }
+};
+

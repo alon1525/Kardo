@@ -3,8 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import Flashcard from '../components/Flashcard';
-import { getUserDecks, getDeckCards, addCard, updateCard, deleteCard, deleteDeck, getAISuggestions, getDueCards, reviewCard as reviewCardAPI, initProgress } from '../api/decks';
+import { getUserDecks, getDeckCards, addCard, updateCard, deleteCard, deleteDeck, getAISuggestions, getDueCards, reviewCard as reviewCardAPI, initProgress, getUserSettings, getDeckStatistics, updateUserSettings } from '../api/decks';
 import { calculateNextReviewTime, formatNextReviewTime } from '../utils/srs';
+import SRSSettingsView from '../components/SRSSettingsView';
 
 // Simple markdown renderer component
 const SimpleMarkdown = ({ text, invert = false }) => {
@@ -62,6 +63,9 @@ const DeckPage = () => {
   const [isFlipped, setIsFlipped] = useState(false);
   const [dueCards, setDueCards] = useState([]);
   const [loadingDueCards, setLoadingDueCards] = useState(false);
+  const [userSettings, setUserSettings] = useState(null);
+  const [matureCount, setMatureCount] = useState(0);
+  const [deckStats, setDeckStats] = useState(null); // Full deck statistics
 
   // Card editor mode (full-screen card creation)
   const [cardEditorMode, setCardEditorMode] = useState(false);
@@ -85,8 +89,37 @@ const DeckPage = () => {
   useEffect(() => {
     if (currentUser && deckId) {
       loadDeckData();
+      loadUserSettings();
+      loadMatureCount();
     }
   }, [currentUser, deckId]);
+  
+  const loadUserSettings = async () => {
+    if (!currentUser) return;
+    try {
+      const userId = currentUser.id || currentUser.uid || currentUser.email;
+      const settings = await getUserSettings(userId);
+      setUserSettings(settings);
+    } catch (error) {
+      console.warn('Error loading user settings, using defaults:', error);
+      setUserSettings(null); // Will use defaults in calculateNextReviewTime
+    }
+  };
+  
+  const loadMatureCount = async () => {
+    if (!currentUser || !deckId) return;
+    try {
+      const userId = currentUser.id || currentUser.uid || currentUser.email;
+      const stats = await getDeckStatistics(deckId, userId);
+      setMatureCount(stats.mature || 0);
+      setDeckStats(stats); // Store full stats
+    } catch (error) {
+      // Silently handle errors - mature count is not critical for functionality
+      console.debug('Error fetching mature count (non-critical):', error);
+      setMatureCount(0);
+      setDeckStats(null);
+    }
+  };
 
   const normalizeCard = (card) => {
     if (!card) return null;
@@ -784,75 +817,58 @@ const DeckPage = () => {
     const currentCard = dueCards[currentCardIndex];
     const userId = currentUser.id || currentUser.uid || currentUser.email;
     
-    try {
-      // Update progress using SRS algorithm
-      // Only try if card has a numeric ID (from new cards table)
-      // Cards from old format might have string IDs that won't work with user_progress
-      if (currentCard.id && typeof currentCard.id === 'number') {
-        try {
-          await reviewCardAPI(currentCard.id, userId, grade);
-        } catch (reviewError) {
-          console.warn('Error saving progress (card might not be in new format yet):', reviewError);
-          // Continue anyway - user can still practice
-        }
-      } else {
-        console.warn('Card ID is not numeric, skipping progress save. Card might need migration.');
-      }
-      
-      // Remove the reviewed card from the current queue
-      const updatedCards = dueCards.filter((_, index) => index !== currentCardIndex);
-      
-      // Refresh due cards to get updated counts and any new cards that might now be due
-      try {
-        const refreshedCards = await getDueCards(deckId, userId);
-        
-        // Update the cards list with refreshed data
-        setDueCards(refreshedCards);
-        
-        // Adjust current index (if we removed a card, stay at same index, otherwise move to next)
-        if (refreshedCards.length === 0) {
-          // All done!
-          setCurrentCardIndex(0);
-          setIsFlipped(false);
-          setShowAnswer(false);
-          alert('Review complete! Great job! 🎉');
-          setDeckMode(null);
-        } else if (currentCardIndex >= refreshedCards.length) {
-          // We've reviewed all cards, but there might be more due now
-          setCurrentCardIndex(0);
-          setIsFlipped(false);
-          setShowAnswer(false);
-        } else {
-          // Move to next card (or stay at same index if cards were removed)
-          setCurrentCardIndex(Math.min(currentCardIndex, refreshedCards.length - 1));
-          setIsFlipped(false);
-          setShowAnswer(false);
-        }
-      } catch (refreshError) {
-        // If refresh fails, just remove the card from local state
-        console.warn('Error refreshing due cards:', refreshError);
-        if (updatedCards.length === 0) {
-          setCurrentCardIndex(0);
-          setIsFlipped(false);
-          setShowAnswer(false);
-          alert('Review complete! Great job! 🎉');
-          setDeckMode(null);
-        } else {
-          setDueCards(updatedCards);
-          setCurrentCardIndex(Math.min(currentCardIndex, updatedCards.length - 1));
-          setIsFlipped(false);
-          setShowAnswer(false);
-        }
-      }
-    } catch (error) {
-      console.error('Error reviewing card:', error);
-      // Still move to next card
-      if (currentCardIndex < dueCards.length - 1) {
-        setCurrentCardIndex(currentCardIndex + 1);
-        setIsFlipped(false);
-        setShowAnswer(false);
-      }
+    // Immediately move to next card for better UX (optimistic update)
+    const nextIndex = currentCardIndex + 1;
+    const remainingCards = dueCards.filter((_, index) => index !== currentCardIndex);
+    
+    // Update UI immediately
+    if (remainingCards.length === 0) {
+      // All done!
+      setCurrentCardIndex(0);
+      setIsFlipped(false);
+      setShowAnswer(false);
+      setDueCards([]);
+      alert('Review complete! Great job! 🎉');
+      setDeckMode(null);
+    } else {
+      // Move to next card immediately
+      setCurrentCardIndex(Math.min(nextIndex - 1, remainingCards.length - 1));
+      setDueCards(remainingCards);
+      setIsFlipped(false);
+      setShowAnswer(false);
     }
+    
+    // Save progress in background (don't wait for it)
+    if (currentCard.id && typeof currentCard.id === 'number') {
+      reviewCardAPI(currentCard.id, userId, grade).catch(reviewError => {
+        console.warn('Error saving progress:', reviewError);
+      });
+    }
+    
+    // Refresh cards in background to update counts (but don't wait)
+    setTimeout(() => {
+      getDueCards(deckId, userId)
+        .then(refreshedCards => {
+          // Only update if we're still in practice mode
+          if (deckMode === 'practice') {
+            setDueCards(prevCards => {
+              // Only update if we got new cards, otherwise keep current
+              if (refreshedCards.length > 0) {
+                return refreshedCards;
+              }
+              return prevCards;
+            });
+            // Reload mature count silently
+            loadMatureCount().catch(() => {
+              // Silently fail - mature count is not critical
+            });
+          }
+        })
+        .catch(refreshError => {
+          // Silently fail - background refresh is not critical
+          console.debug('Background refresh failed (non-critical):', refreshError);
+        });
+    }, 300); // Reduced delay for faster updates
   };
 
   // Add error boundary state
@@ -1437,43 +1453,72 @@ const DeckPage = () => {
                   </button>
                 </div>
               ) : (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 border border-gray-200 dark:border-gray-700">
+                <div className="bg-white dark:bg-gray-800/95 dark:backdrop-blur-sm rounded-lg shadow-lg p-8 border border-gray-200 dark:border-gray-700">
                   {/* Anki-style statistics at top */}
                   <div className="mb-6 flex items-center justify-center gap-6 sm:gap-8">
                     {(() => {
-                      // Calculate stats for current session
-                      // New: no progress or never reviewed
-                      const newCount = dueCards.filter(c => 
-                        !c.progress || 
-                        (c.progress.repetitions === 0 && !c.progress.last_review)
-                      ).length;
+                      // Use server stats if available (more accurate), otherwise calculate from dueCards
+                      const stats = deckStats || {
+                        new: 0,
+                        learning: 0,
+                        due: 0,
+                        review: 0,
+                        mature: matureCount
+                      };
                       
-                      // Learning: interval < 1 day, has been reviewed (includes due and not due)
-                      const learningCount = dueCards.filter(c => 
-                        c.progress && 
-                        c.progress.last_review && 
-                        c.progress.interval < 1
-                      ).length;
+                      // Calculate stats for current session (from dueCards array)
+                      const currentCard = dueCards[currentCardIndex];
+                      const currentCardProgress = currentCard?.progress || null;
+                      const now = new Date();
                       
-                      // Due: due_date <= now() (cards that need review now - includes learning cards that are due)
-                      const dueCount = dueCards.filter(c => 
-                        !c.progress || 
-                        (c.progress.due_date && new Date(c.progress.due_date) <= new Date())
-                      ).length;
+                      // Determine current card's category for highlighting
+                      // NEW = repetitions = 0
+                      const isCurrentCardNew = !currentCardProgress || 
+                        (currentCardProgress.repetitions === 0);
+                      
+                      // DUE = due_date <= now() AND repetitions != 0
+                      const isCurrentCardDue = currentCardProgress && 
+                        currentCardProgress.repetitions != 0 &&
+                        currentCardProgress.due_date && 
+                        new Date(currentCardProgress.due_date) <= now;
+                      
+                      // Review = due_date > now() AND (due_date - now()) <= 60 days AND repetitions != 0
+                      const isCurrentCardReview = currentCardProgress && 
+                        currentCardProgress.repetitions != 0 &&
+                        currentCardProgress.due_date && 
+                        new Date(currentCardProgress.due_date) > now &&
+                        (new Date(currentCardProgress.due_date) - now) / (1000 * 60 * 60 * 24) <= 60;
+                      
+                      // Mature = due_date > now() AND (due_date - now()) >= 60 days AND repetitions != 0
+                      const isCurrentCardMature = currentCardProgress && 
+                        currentCardProgress.repetitions != 0 &&
+                        currentCardProgress.due_date && 
+                        new Date(currentCardProgress.due_date) > now &&
+                        (new Date(currentCardProgress.due_date) - now) / (1000 * 60 * 60 * 24) >= 60;
+                      
+                      // Use server stats for accurate counts (includes all cards, not just dueCards)
+                      const newCount = stats.new || 0;
+                      const reviewCount = stats.review || stats.learning || 0; // Review = Learning (same thing)
+                      const dueCount = stats.due || 0;
+                      const finalMatureCount = stats.mature || matureCount || 0;
                       
                       return (
                         <>
                           <div className="text-center">
-                            <div className="text-3xl sm:text-4xl font-bold text-blue-600 dark:text-blue-400">{newCount}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">New</div>
+                            <div className={`text-3xl sm:text-4xl font-bold text-blue-600 dark:text-blue-400 ${isCurrentCardNew ? 'underline decoration-2 underline-offset-4' : ''}`}>{newCount}</div>
+                            <div className={`text-xs text-gray-500 dark:text-gray-400 mt-1 ${isCurrentCardNew ? 'underline decoration-2 underline-offset-1' : ''}`}>New</div>
                           </div>
                           <div className="text-center">
-                            <div className="text-3xl sm:text-4xl font-bold text-red-600 dark:text-red-400">{dueCount}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Due</div>
+                            <div className={`text-3xl sm:text-4xl font-bold text-red-600 dark:text-red-400 ${isCurrentCardDue && !isCurrentCardNew ? 'underline decoration-2 underline-offset-4' : ''}`}>{dueCount}</div>
+                            <div className={`text-xs text-gray-500 dark:text-gray-400 mt-1 ${isCurrentCardDue && !isCurrentCardNew ? 'underline decoration-2 underline-offset-1' : ''}`}>Due</div>
                           </div>
                           <div className="text-center">
-                            <div className="text-3xl sm:text-4xl font-bold text-green-600 dark:text-green-400">{learningCount}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Learning</div>
+                            <div className={`text-3xl sm:text-4xl font-bold text-green-600 dark:text-green-400 ${isCurrentCardReview ? 'underline decoration-2 underline-offset-4' : ''}`}>{reviewCount}</div>
+                            <div className={`text-xs text-gray-500 dark:text-gray-400 mt-1 ${isCurrentCardReview ? 'underline decoration-2 underline-offset-1' : ''}`}>Review</div>
+                          </div>
+                          <div className="text-center">
+                            <div className={`text-3xl sm:text-4xl font-bold text-gray-600 dark:text-gray-400 ${isCurrentCardMature ? 'underline decoration-2 underline-offset-4' : ''}`}>{finalMatureCount}</div>
+                            <div className={`text-xs text-gray-500 dark:text-gray-400 mt-1 ${isCurrentCardMature ? 'underline decoration-2 underline-offset-1' : ''}`}>Mature</div>
                           </div>
                         </>
                       );
@@ -1495,11 +1540,11 @@ const DeckPage = () => {
                         const currentCard = dueCards[currentCardIndex];
                         const cardProgress = currentCard?.progress || null;
                         
-                        // Calculate next review times for each button
-                        const againTime = calculateNextReviewTime(cardProgress, 'again');
-                        const hardTime = calculateNextReviewTime(cardProgress, 'hard');
-                        const goodTime = calculateNextReviewTime(cardProgress, 'good');
-                        const easyTime = calculateNextReviewTime(cardProgress, 'easy');
+                        // Calculate next review times for each button (with user settings)
+                        const againTime = calculateNextReviewTime(cardProgress, 'again', userSettings);
+                        const hardTime = calculateNextReviewTime(cardProgress, 'hard', userSettings);
+                        const goodTime = calculateNextReviewTime(cardProgress, 'good', userSettings);
+                        const easyTime = calculateNextReviewTime(cardProgress, 'easy', userSettings);
                         
                         return (
                           <div className="mt-6 space-y-3 relative z-10">
@@ -1573,6 +1618,18 @@ const DeckPage = () => {
               <p className="text-sm text-gray-500 dark:text-gray-400">Multiple game modes will be available soon to make learning more engaging</p>
             </div>
           </div>
+        )}
+
+        {deckMode === 'settings' && (
+          <SRSSettingsView
+            currentUser={currentUser}
+            userSettings={userSettings}
+            onSettingsUpdated={(updatedSettings) => {
+              setUserSettings(updatedSettings);
+              setDeckMode(null);
+            }}
+            onBack={() => setDeckMode(null)}
+          />
         )}
 
         {deckMode === 'upload-file' && (
