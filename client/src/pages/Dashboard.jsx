@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
-import Footer from '../components/Footer';
 import { getUserDecks, createDeck, deleteDeck, getUserStats, updateDeckPublicStatus } from '../api/decks';
 
 /**
@@ -410,8 +409,6 @@ const Dashboard = () => {
           </div>
         </div>
       )}
-
-      <Footer />
     </div>
   );
 };

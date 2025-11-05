@@ -744,11 +744,11 @@ const DeckPage = () => {
   // Add error boundary state
   if (!deck && currentUser && deckId) {
     return (
-      <div className="min-h-screen flex flex-col bg-gray-50">
+      <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors">
         <Navbar />
         <div className="flex-grow flex items-center justify-center">
           <div className="text-center">
-            <div className="text-xl mb-4">Loading deck...</div>
+            <div className="text-xl mb-4 text-gray-900 dark:text-white">Loading deck...</div>
             <button 
               onClick={() => loadDeckData()}
               className="btn-primary"
@@ -763,8 +763,8 @@ const DeckPage = () => {
 
   if (!deck) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors">
+        <div className="text-xl text-gray-900 dark:text-white">Loading...</div>
       </div>
     );
   }
@@ -1034,7 +1034,7 @@ const DeckPage = () => {
     console.error('Deck is invalid:', deck);
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
-        <Navbar />
+      <Navbar />
         <div className="flex-grow flex items-center justify-center">
           <div className="text-center">
             <p className="text-xl mb-4">Error loading deck</p>
@@ -1054,7 +1054,7 @@ const DeckPage = () => {
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors">
       <Navbar />
       
-      <div className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         {/* Header */}
         <div className="mb-8">
             <button
@@ -1173,25 +1173,39 @@ const DeckPage = () => {
                     </div>
                 <p className="text-gray-600 dark:text-gray-300">Learn through fun interactive games</p>
               </button>
+
+              {/* Upload File */}
+              <button
+                onClick={() => setDeckMode('upload-file')}
+                className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-900 dark:to-teal-800 rounded-lg shadow-lg p-6 hover:shadow-xl transition-all hover:scale-105 text-left group border-2 border-teal-200 dark:border-teal-700"
+              >
+                <div className="flex items-center gap-4 mb-3">
+                  <div className="bg-gradient-to-br from-teal-500 to-teal-600 rounded-lg p-3 group-hover:from-teal-600 group-hover:to-teal-700 transition-all shadow-md">
+                    <span className="material-icons text-white text-3xl">upload_file</span>
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-white">Upload File</h3>
+                </div>
+                <p className="text-gray-600 dark:text-gray-300">Create cards automatically from a file</p>
+              </button>
                   </div>
           </div>
         )}
 
-
+        {/* Edit Cards - Full Width Section */}
         {deckMode === 'edit-cards' && (
           <div>
-            <div className="mb-6 flex items-center justify-between">
+            <div className="mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => setDeckMode(null)}
-                  className="text-gray-600 hover:text-gray-900"
+                  className="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                   title="Back to options"
                 >
                   <span className="material-icons text-2xl">arrow_back</span>
                 </button>
-              <h2 className="text-xl font-semibold">Edit Cards</h2>
+                <h2 className="text-xl font-semibold dark:text-white">Edit Cards</h2>
               </div>
-              <button onClick={handleAddCard} className="btn-primary flex items-center gap-2">
+              <button onClick={handleAddCard} className="btn-primary flex items-center gap-2 w-full sm:w-auto">
                 <span className="material-icons">add</span>
                 Add New Card
               </button>
@@ -1212,15 +1226,15 @@ const DeckPage = () => {
                 </button>
               </div>
             ) : (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+              <div className="w-screen -mx-4 sm:-mx-6 lg:-mx-8 bg-white dark:bg-gray-800 shadow-lg overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gradient-to-r from-primary-500 to-primary-600 dark:from-primary-700 dark:to-primary-800">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">#</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Front</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Back</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Actions</th>
+                        <th className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4 text-left text-sm font-medium text-white uppercase tracking-wider">#</th>
+                        <th className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4 text-left text-sm font-medium text-white uppercase tracking-wider">Front</th>
+                        <th className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4 text-left text-sm font-medium text-white uppercase tracking-wider">Back</th>
+                        <th className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4 text-left text-sm font-medium text-white uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -1233,20 +1247,20 @@ const DeckPage = () => {
                             onClick={() => handleEditCard(card)}
                             className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer"
                           >
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
+                            <td className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
                               {index + 1}
                             </td>
-                            <td className="px-6 py-4">
-                              <div className="text-sm text-gray-900 dark:text-white">
+                            <td className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4">
+                              <div className="text-sm text-gray-900 dark:text-white max-w-none break-words">
                                 {frontContent || <span className="text-gray-400 dark:text-gray-500 italic">Empty</span>}
                               </div>
                             </td>
-                            <td className="px-6 py-4">
-                              <div className="text-sm text-gray-700 dark:text-gray-300">
+                            <td className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4">
+                              <div className="text-sm text-gray-700 dark:text-gray-300 max-w-none break-words">
                                 {backContent || <span className="text-gray-400 dark:text-gray-500 italic">Empty</span>}
                               </div>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <td className="px-4 sm:px-8 lg:px-12 xl:px-16 py-4 whitespace-nowrap text-sm">
                       <button
                                 onClick={(e) => {
                                   e.stopPropagation(); // Prevent row click when clicking delete
@@ -1400,12 +1414,33 @@ const DeckPage = () => {
                 <span className="material-icons text-2xl">arrow_back</span>
               </button>
               <h2 className="text-xl font-semibold dark:text-white">Game Modes</h2>
-      </div>
+            </div>
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center border border-gray-200 dark:border-gray-700">
               <span className="material-icons text-6xl text-orange-400 dark:text-orange-500 mb-4">sports_esports</span>
               <h3 className="text-2xl font-semibold mb-2 dark:text-white">Game Modes Coming Soon!</h3>
               <p className="text-gray-600 dark:text-gray-300 mb-6">Learn through fun interactive games</p>
               <p className="text-sm text-gray-500 dark:text-gray-400">Multiple game modes will be available soon to make learning more engaging</p>
+            </div>
+          </div>
+        )}
+
+        {deckMode === 'upload-file' && (
+          <div>
+            <div className="mb-6 flex items-center gap-4">
+              <button
+                onClick={() => setDeckMode(null)}
+                className="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                title="Back to options"
+              >
+                <span className="material-icons text-2xl">arrow_back</span>
+              </button>
+              <h2 className="text-xl font-semibold dark:text-white">Upload File</h2>
+            </div>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center border border-gray-200 dark:border-gray-700">
+              <span className="material-icons text-6xl text-teal-400 dark:text-teal-500 mb-4">upload_file</span>
+              <h3 className="text-2xl font-semibold mb-2 dark:text-white">File Upload Coming Soon!</h3>
+              <p className="text-gray-600 dark:text-gray-300 mb-6">Upload a file and automatically generate flashcards from its content</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">This feature will allow you to upload documents, PDFs, or text files and have cards created automatically based on the content</p>
             </div>
           </div>
         )}
