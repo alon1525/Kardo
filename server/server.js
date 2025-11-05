@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { getAISuggestions, getCardExplanation } from './ai-service.js';
+import { reviewCard } from './srs-algorithm.js';
 
 dotenv.config();
 
@@ -152,95 +153,151 @@ app.delete('/api/decks/:id', async (req, res) => {
   }
 });
 
-// Get cards for a deck
+// Get cards for a deck (using new cards table, with fallback to old JSONB)
 app.get('/api/decks/:deckId/cards', async (req, res) => {
   const deckId = req.params.deckId;
   
   try {
-    const result = await pool.query(
+    // Try to get cards from new cards table first
+    const cardsResult = await pool.query(
+      'SELECT id, front, back, difficulty, created_at, updated_at FROM cards WHERE deck_id = $1 ORDER BY id',
+      [deckId]
+    );
+    
+    if (cardsResult.rows.length > 0) {
+      // Return cards from new table
+      const cards = cardsResult.rows.map(row => ({
+        id: row.id,
+        front: typeof row.front === 'string' ? JSON.parse(row.front) : row.front,
+        back: typeof row.back === 'string' ? JSON.parse(row.back) : row.back,
+        difficulty: row.difficulty,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      }));
+      return res.json(cards);
+    }
+    
+    // Fallback to old JSONB structure (for backward compatibility during migration)
+    const deckResult = await pool.query(
       'SELECT cards FROM decks WHERE id = $1',
       [deckId]
     );
-    const cards = result.rows[0]?.cards || [];
+    const cards = deckResult.rows[0]?.cards || [];
     res.json(cards);
   } catch (err) {
+    console.error('Error fetching cards:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Add a card to a deck
+// Add a card to a deck (using new cards table, preserving all formatting)
 app.post('/api/decks/:deckId/cards', async (req, res) => {
   const deckId = req.params.deckId;
   const { front, back, frontAlign, backAlign, frontVerticalAlign, backVerticalAlign, frontFontSize, backFontSize, difficulty } = req.body;
   
   try {
-    // Get current cards
-    const deckResult = await pool.query('SELECT cards FROM decks WHERE id = $1', [deckId]);
-    const currentCards = deckResult.rows[0]?.cards || [];
-    
-    // Add new card with front/back objects including alignment and font size
-    const newCard = {
-      id: Date.now(),
-      front: {
-        content: front,
-        align: frontAlign || 'center',
-        verticalAlign: frontVerticalAlign || 'middle',
-        fontSize: frontFontSize || '18'
-      },
-      back: {
-        content: back,
-        align: backAlign || 'center',
-        verticalAlign: backVerticalAlign || 'middle',
-        fontSize: backFontSize || '18'
-      },
-      difficulty: difficulty || 'medium'
+    // Build front and back JSONB objects with all formatting
+    const frontObj = {
+      content: front || '',
+      align: frontAlign || 'center',
+      verticalAlign: frontVerticalAlign || 'middle',
+      fontSize: frontFontSize || '18'
     };
-    currentCards.push(newCard);
     
-    // Update deck with new cards array
+    const backObj = {
+      content: back || '',
+      align: backAlign || 'center',
+      verticalAlign: backVerticalAlign || 'middle',
+      fontSize: backFontSize || '18'
+    };
+    
+    // Insert into new cards table
+    const result = await pool.query(
+      `INSERT INTO cards (deck_id, front, back, difficulty) 
+       VALUES ($1, $2::jsonb, $3::jsonb, $4) 
+       RETURNING id, front, back, difficulty, created_at, updated_at`,
+      [deckId, JSON.stringify(frontObj), JSON.stringify(backObj), difficulty || 'medium']
+    );
+    
+    const newCard = {
+      id: result.rows[0].id,
+      front: result.rows[0].front,
+      back: result.rows[0].back,
+      difficulty: result.rows[0].difficulty,
+      created_at: result.rows[0].created_at,
+      updated_at: result.rows[0].updated_at
+    };
+    
+    // Update deck card_count
     await pool.query(
-      'UPDATE decks SET cards = $1::jsonb WHERE id = $2',
-      [JSON.stringify(currentCards), deckId]
+      'UPDATE decks SET card_count = (SELECT COUNT(*) FROM cards WHERE deck_id = $1) WHERE id = $1',
+      [deckId]
     );
     
     res.json(newCard);
   } catch (err) {
+    console.error('Error adding card:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update a card
+// Update a card (preserving formatting)
 app.put('/api/cards/:id', async (req, res) => {
   const cardId = req.params.id;
-  const { front, back, difficulty } = req.body;
-  
-  const { deckId } = req.body;
+  const { front, back, frontAlign, backAlign, frontVerticalAlign, backVerticalAlign, frontFontSize, backFontSize, difficulty, deckId } = req.body;
   
   try {
-    // Get current cards
-    const deckResult = await pool.query('SELECT cards FROM decks WHERE id = $1', [deckId]);
-    const cards = deckResult.rows[0]?.cards || [];
+    // Get existing card to preserve formatting if not provided
+    const existingResult = await pool.query('SELECT front, back FROM cards WHERE id = $1', [cardId]);
     
-    // Update the card with proper object structure
-    const updatedCards = cards.map(card => 
-      card.id == cardId 
-        ? { 
-            ...card, 
-            front: { content: front },
-            back: { content: back },
-            difficulty 
-          }
-        : card
-    );
+    let frontObj, backObj;
     
-    // Update deck
+    if (existingResult.rows.length > 0) {
+      // Preserve existing formatting, update with new values
+      const existingFront = existingResult.rows[0].front;
+      const existingBack = existingResult.rows[0].back;
+      
+      frontObj = {
+        content: front || existingFront?.content || '',
+        align: frontAlign || existingFront?.align || 'center',
+        verticalAlign: frontVerticalAlign || existingFront?.verticalAlign || 'middle',
+        fontSize: frontFontSize || existingFront?.fontSize || '18'
+      };
+      
+      backObj = {
+        content: back || existingBack?.content || '',
+        align: backAlign || existingBack?.align || 'center',
+        verticalAlign: backVerticalAlign || existingBack?.verticalAlign || 'middle',
+        fontSize: backFontSize || existingBack?.fontSize || '18'
+      };
+    } else {
+      // New card structure
+      frontObj = {
+        content: front || '',
+        align: frontAlign || 'center',
+        verticalAlign: frontVerticalAlign || 'middle',
+        fontSize: frontFontSize || '18'
+      };
+      
+      backObj = {
+        content: back || '',
+        align: backAlign || 'center',
+        verticalAlign: backVerticalAlign || 'middle',
+        fontSize: backFontSize || '18'
+      };
+    }
+    
+    // Update card in new table
     await pool.query(
-      'UPDATE decks SET cards = $1::jsonb WHERE id = $2',
-      [JSON.stringify(updatedCards), deckId]
+      `UPDATE cards 
+       SET front = $1::jsonb, back = $2::jsonb, difficulty = $3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4`,
+      [JSON.stringify(frontObj), JSON.stringify(backObj), difficulty || 'medium', cardId]
     );
     
     res.json({ message: 'Card updated successfully' });
   } catch (err) {
+    console.error('Error updating card:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -251,50 +308,263 @@ app.delete('/api/cards/:id', async (req, res) => {
   const { deckId } = req.query;
   
   try {
-    // Get current cards
-    const deckResult = await pool.query('SELECT cards FROM decks WHERE id = $1', [deckId]);
-    const cards = deckResult.rows[0]?.cards || [];
+    // Delete from new cards table
+    const result = await pool.query('DELETE FROM cards WHERE id = $1 RETURNING deck_id', [cardId]);
     
-    // Remove the card
-    const updatedCards = cards.filter(card => card.id != cardId);
-    
-    // Update deck
-    await pool.query(
-      'UPDATE decks SET cards = $1::jsonb WHERE id = $2',
-      [JSON.stringify(updatedCards), deckId]
-    );
+    if (result.rows.length > 0) {
+      const deletedDeckId = result.rows[0].deck_id;
+      
+      // Update deck card_count
+      await pool.query(
+        'UPDATE decks SET card_count = (SELECT COUNT(*) FROM cards WHERE deck_id = $1) WHERE id = $1',
+        [deletedDeckId]
+      );
+    }
     
     res.json({ message: 'Card deleted successfully' });
   } catch (err) {
+    console.error('Error deleting card:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get study progress for a user
+// ==================== SRS (Spaced Repetition System) Endpoints ====================
+
+// Get due cards for a user in a deck (cards that need to be reviewed)
+app.get('/api/decks/:deckId/due-cards', async (req, res) => {
+  const deckId = req.params.deckId;
+  const userId = req.query.userId || req.headers['x-user-id'];
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  try {
+    // First, check if there are any cards in the deck at all (new table)
+    const cardCountResult = await pool.query(
+      'SELECT COUNT(*) as count FROM cards WHERE deck_id = $1',
+      [deckId]
+    );
+    const totalCards = parseInt(cardCountResult.rows[0]?.count || 0);
+    console.log(`Total cards in deck ${deckId} (new table): ${totalCards}`);
+    
+    // Also check old format
+    const oldCardsResult = await pool.query(
+      'SELECT cards FROM decks WHERE id = $1',
+      [deckId]
+    );
+    const oldCards = oldCardsResult.rows[0]?.cards || [];
+    const oldCardsCount = Array.isArray(oldCards) ? oldCards.length : 0;
+    console.log(`Cards in deck ${deckId} (old JSONB format): ${oldCardsCount}`);
+    
+    // If no cards in new table but cards exist in old format, return empty array
+    // (user needs to run migration first)
+    if (totalCards === 0 && oldCardsCount > 0) {
+      console.warn(`Deck ${deckId} has cards in old format but not migrated to new cards table yet`);
+      return res.json([]);
+    }
+    
+    if (totalCards === 0) {
+      console.log(`No cards found in deck ${deckId}`);
+      return res.json([]);
+    }
+    
+    // Get all cards in the deck that are either:
+    // 1. Not in user_progress (new cards - should always be shown)
+    // 2. Due for review (due_date <= now())
+    const result = await pool.query(
+      `SELECT 
+        c.id,
+        c.deck_id,
+        c.front,
+        c.back,
+        c.difficulty,
+        c.hint,
+        COALESCE(up.interval, 0) as interval,
+        COALESCE(up.ease_factor, 2.5) as ease_factor,
+        COALESCE(up.repetitions, 0) as repetitions,
+        COALESCE(up.due_date, CURRENT_TIMESTAMP) as due_date,
+        up.last_review,
+        CASE WHEN up.user_id IS NULL THEN true ELSE false END as is_new
+      FROM cards c
+      LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+      WHERE c.deck_id = $2
+        AND (up.user_id IS NULL OR up.due_date <= CURRENT_TIMESTAMP)
+      ORDER BY up.due_date ASC NULLS FIRST, c.id ASC
+      LIMIT 50`,
+      [userId, deckId]
+    );
+    
+    const newCardsCount = result.rows.filter(r => r.is_new).length;
+    console.log(`Found ${result.rows.length} due cards for user ${userId} in deck ${deckId}`);
+    console.log(`  - Total cards in deck: ${totalCards}`);
+    console.log(`  - New cards (no progress): ${newCardsCount}`);
+    console.log(`  - Cards with progress: ${result.rows.length - newCardsCount}`);
+    
+    const cards = result.rows.map(row => ({
+      id: row.id,
+      deck_id: row.deck_id,
+      front: typeof row.front === 'string' ? JSON.parse(row.front) : row.front,
+      back: typeof row.back === 'string' ? JSON.parse(row.back) : row.back,
+      difficulty: row.difficulty,
+      hint: row.hint,
+      progress: {
+        interval: row.interval,
+        ease_factor: parseFloat(row.ease_factor),
+        repetitions: row.repetitions,
+        due_date: row.due_date,
+        last_review: row.last_review
+      }
+    }));
+    
+    res.json(cards);
+  } catch (err) {
+    console.error('Error fetching due cards:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Review a card (update progress based on SRS algorithm)
+app.post('/api/cards/:cardId/review', async (req, res) => {
+  const cardId = req.params.cardId;
+  const { userId, grade } = req.body; // grade: "again", "hard", "good", "easy"
+  
+  if (!userId || !grade) {
+    return res.status(400).json({ error: 'User ID and grade are required' });
+  }
+  
+  if (!['again', 'hard', 'good', 'easy'].includes(grade)) {
+    return res.status(400).json({ error: 'Grade must be "again", "hard", "good", or "easy"' });
+  }
+  
+  try {
+    // Get current progress or create new (cast user_id to text for comparison)
+    const progressResult = await pool.query(
+      'SELECT * FROM user_progress WHERE user_id::text = $1::text AND card_id = $2',
+      [userId, cardId]
+    );
+    
+    let currentProgress = null;
+    if (progressResult.rows.length > 0) {
+      const row = progressResult.rows[0];
+      currentProgress = {
+        interval: row.interval,
+        ease_factor: parseFloat(row.ease_factor),
+        repetitions: row.repetitions,
+        due_date: row.due_date,
+        last_review: row.last_review
+      };
+    }
+    
+    // Apply SRS algorithm
+    const updatedProgress = reviewCard(currentProgress, grade);
+    
+    // Insert or update progress
+    await pool.query(
+      `INSERT INTO user_progress (user_id, card_id, interval, ease_factor, repetitions, due_date, last_review)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (user_id, card_id)
+       DO UPDATE SET
+         interval = EXCLUDED.interval,
+         ease_factor = EXCLUDED.ease_factor,
+         repetitions = EXCLUDED.repetitions,
+         due_date = EXCLUDED.due_date,
+         last_review = EXCLUDED.last_review,
+         updated_at = CURRENT_TIMESTAMP`,
+      [
+        userId,
+        cardId,
+        updatedProgress.interval,
+        updatedProgress.ease_factor,
+        updatedProgress.repetitions,
+        updatedProgress.due_date,
+        updatedProgress.last_review
+      ]
+    );
+    
+    res.json({
+      message: 'Card reviewed successfully',
+      progress: updatedProgress
+    });
+  } catch (err) {
+    console.error('Error reviewing card:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Initialize progress for all cards in a deck (when user starts practicing)
+app.post('/api/decks/:deckId/init-progress', async (req, res) => {
+  const deckId = req.params.deckId;
+  const userId = req.body.userId || req.headers['x-user-id'];
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  try {
+    // Get all cards in deck that don't have progress yet
+    const cardsResult = await pool.query(
+      `SELECT c.id 
+       FROM cards c
+       LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       WHERE c.deck_id = $2 AND up.card_id IS NULL`,
+      [userId, deckId]
+    );
+    
+    console.log(`Initializing progress for ${cardsResult.rows.length} cards for user ${userId} in deck ${deckId}`);
+    
+    // Initialize progress for each card (due immediately - set to current time)
+    const now = new Date();
+    const initialProgress = {
+      interval: 0,
+      ease_factor: 2.5,
+      repetitions: 0,
+      due_date: now,
+      last_review: null
+    };
+    
+    for (const card of cardsResult.rows) {
+      try {
+        await pool.query(
+          `INSERT INTO user_progress (user_id, card_id, interval, ease_factor, repetitions, due_date, last_review)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (user_id, card_id) DO NOTHING`,
+          [
+            userId,
+            card.id,
+            initialProgress.interval,
+            initialProgress.ease_factor,
+            initialProgress.repetitions,
+            initialProgress.due_date,
+            initialProgress.last_review
+          ]
+        );
+      } catch (insertErr) {
+        console.error(`Error inserting progress for card ${card.id}:`, insertErr);
+        // Continue with other cards
+      }
+    }
+    
+    res.json({
+      message: `Progress initialized for ${cardsResult.rows.length} cards`,
+      count: cardsResult.rows.length
+    });
+  } catch (err) {
+    console.error('Error initializing progress:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get study progress for a user (legacy endpoint - kept for compatibility)
 app.get('/api/progress/:userId', async (req, res) => {
   const userId = req.params.userId;
   
   try {
     const result = await pool.query(
-      'SELECT * FROM study_progress WHERE user_id = $1',
+      'SELECT * FROM user_progress WHERE user_id = $1',
       [userId]
     );
     res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Record study session
-app.post('/api/progress', async (req, res) => {
-  const { userId, cardId, difficulty } = req.body;
-  
-  try {
-    await pool.query(
-      'INSERT INTO study_progress (user_id, card_id, difficulty, date_reviewed) VALUES ($1, $2, $3, NOW()) ON CONFLICT (user_id, card_id) DO UPDATE SET difficulty = $4, date_reviewed = NOW()',
-      [userId, cardId, difficulty, difficulty]
-    );
-    res.json({ message: 'Progress recorded' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

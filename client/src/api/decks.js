@@ -348,3 +348,81 @@ export const getCardExplanation = async (front, back, language = 'English') => {
   }
 };
 
+// ==================== SRS (Spaced Repetition System) API Functions ====================
+
+/**
+ * Get due cards for a deck (cards that need to be reviewed)
+ * @param {string} deckId - Deck ID
+ * @param {string} userId - User ID
+ * @returns {Promise<Array>} Array of cards with progress data
+ */
+export const getDueCards = async (deckId, userId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/decks/${deckId}/due-cards?userId=${userId}`);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to get due cards');
+    }
+    const data = await response.json();
+    return data || [];
+  } catch (error) {
+    console.error('Error getting due cards:', error);
+    throw error;
+  }
+};
+
+/**
+ * Review a card (update progress based on SRS algorithm)
+ * @param {string} cardId - Card ID
+ * @param {string} userId - User ID
+ * @param {string} grade - "again", "hard", "good", or "easy"
+ * @returns {Promise<Object>} Updated progress data
+ */
+export const reviewCard = async (cardId, userId, grade) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/cards/${cardId}/review`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ userId, grade }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to review card');
+    }
+    const data = await response.json();
+    return data.progress || null;
+  } catch (error) {
+    console.error('Error reviewing card:', error);
+    throw error;
+  }
+};
+
+/**
+ * Initialize progress for all cards in a deck (when user starts practicing)
+ * @param {string} deckId - Deck ID
+ * @param {string} userId - User ID
+ * @returns {Promise<Object>} Result with count of initialized cards
+ */
+export const initProgress = async (deckId, userId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/decks/${deckId}/init-progress`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ userId }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to initialize progress');
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error initializing progress:', error);
+    throw error;
+  }
+};
+
