@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import Flashcard from '../components/Flashcard';
 import { getUserDecks, getDeckCards, addCard, updateCard, deleteCard, deleteDeck, getAISuggestions, getDueCards, reviewCard as reviewCardAPI, initProgress } from '../api/decks';
+import { calculateNextReviewTime, formatNextReviewTime } from '../utils/srs';
 
 // Simple markdown renderer component
 const SimpleMarkdown = ({ text, invert = false }) => {
@@ -798,44 +799,53 @@ const DeckPage = () => {
         console.warn('Card ID is not numeric, skipping progress save. Card might need migration.');
       }
       
-      // Move to next card or finish
-      if (currentCardIndex < dueCards.length - 1) {
-        setCurrentCardIndex(currentCardIndex + 1);
-        setIsFlipped(false);
-        setShowAnswer(false);
-      } else {
-        // Review complete - refresh due cards to see if more are available
-        try {
-          const remainingDue = await getDueCards(deckId, userId);
-          
-          if (remainingDue.length > 0) {
-            // More cards due, continue reviewing
-            setDueCards(remainingDue);
-            setCurrentCardIndex(0);
-            setIsFlipped(false);
-            setShowAnswer(false);
-          } else {
-            // All done!
-            setCurrentCardIndex(0);
-            setIsFlipped(false);
-            setShowAnswer(false);
-            alert('Review complete! Great job! 🎉');
-            // Optionally go back to mode selector
-            setDeckMode(null);
-          }
-        } catch (refreshError) {
-          // If refresh fails, just show completion message
-          console.warn('Error refreshing due cards:', refreshError);
+      // Remove the reviewed card from the current queue
+      const updatedCards = dueCards.filter((_, index) => index !== currentCardIndex);
+      
+      // Refresh due cards to get updated counts and any new cards that might now be due
+      try {
+        const refreshedCards = await getDueCards(deckId, userId);
+        
+        // Update the cards list with refreshed data
+        setDueCards(refreshedCards);
+        
+        // Adjust current index (if we removed a card, stay at same index, otherwise move to next)
+        if (refreshedCards.length === 0) {
+          // All done!
           setCurrentCardIndex(0);
           setIsFlipped(false);
           setShowAnswer(false);
           alert('Review complete! Great job! 🎉');
           setDeckMode(null);
+        } else if (currentCardIndex >= refreshedCards.length) {
+          // We've reviewed all cards, but there might be more due now
+          setCurrentCardIndex(0);
+          setIsFlipped(false);
+          setShowAnswer(false);
+        } else {
+          // Move to next card (or stay at same index if cards were removed)
+          setCurrentCardIndex(Math.min(currentCardIndex, refreshedCards.length - 1));
+          setIsFlipped(false);
+          setShowAnswer(false);
+        }
+      } catch (refreshError) {
+        // If refresh fails, just remove the card from local state
+        console.warn('Error refreshing due cards:', refreshError);
+        if (updatedCards.length === 0) {
+          setCurrentCardIndex(0);
+          setIsFlipped(false);
+          setShowAnswer(false);
+          alert('Review complete! Great job! 🎉');
+          setDeckMode(null);
+        } else {
+          setDueCards(updatedCards);
+          setCurrentCardIndex(Math.min(currentCardIndex, updatedCards.length - 1));
+          setIsFlipped(false);
+          setShowAnswer(false);
         }
       }
     } catch (error) {
       console.error('Error reviewing card:', error);
-      // Don't show alert for every error, just log it
       // Still move to next card
       if (currentCardIndex < dueCards.length - 1) {
         setCurrentCardIndex(currentCardIndex + 1);
@@ -1428,11 +1438,48 @@ const DeckPage = () => {
                 </div>
               ) : (
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 border border-gray-200 dark:border-gray-700">
-                  <div className="text-center mb-6">
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      Card {currentCardIndex + 1} of {dueCards.length}
-                    </p>
+                  {/* Anki-style statistics at top */}
+                  <div className="mb-6 flex items-center justify-center gap-6 sm:gap-8">
+                    {(() => {
+                      // Calculate stats for current session
+                      // New: no progress or never reviewed
+                      const newCount = dueCards.filter(c => 
+                        !c.progress || 
+                        (c.progress.repetitions === 0 && !c.progress.last_review)
+                      ).length;
+                      
+                      // Learning: interval < 1 day, has been reviewed (includes due and not due)
+                      const learningCount = dueCards.filter(c => 
+                        c.progress && 
+                        c.progress.last_review && 
+                        c.progress.interval < 1
+                      ).length;
+                      
+                      // Due: due_date <= now() (cards that need review now - includes learning cards that are due)
+                      const dueCount = dueCards.filter(c => 
+                        !c.progress || 
+                        (c.progress.due_date && new Date(c.progress.due_date) <= new Date())
+                      ).length;
+                      
+                      return (
+                        <>
+                          <div className="text-center">
+                            <div className="text-3xl sm:text-4xl font-bold text-blue-600 dark:text-blue-400">{newCount}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">New</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-3xl sm:text-4xl font-bold text-red-600 dark:text-red-400">{dueCount}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Due</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-3xl sm:text-4xl font-bold text-green-600 dark:text-green-400">{learningCount}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Learning</div>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
+                  
                   
                   {dueCards[currentCardIndex] && (
                     <div className="space-y-6">
@@ -1444,38 +1491,51 @@ const DeckPage = () => {
                         />
                       </div>
 
-                      {isFlipped && (
-                        <div className="mt-6 flex flex-wrap justify-center gap-3 relative z-10">
-                          <button
-                            onClick={() => handleAnswer('again')}
-                            className="px-4 sm:px-6 py-3 bg-red-500 dark:bg-red-600 text-white rounded-lg hover:bg-red-600 dark:hover:bg-red-700 transition-colors flex items-center gap-2 text-sm sm:text-base shadow-lg"
-                          >
-                            <span className="material-icons text-lg">close</span>
-                            Again
-                          </button>
-                          <button
-                            onClick={() => handleAnswer('hard')}
-                            className="px-4 sm:px-6 py-3 bg-orange-500 dark:bg-orange-600 text-white rounded-lg hover:bg-orange-600 dark:hover:bg-orange-700 transition-colors flex items-center gap-2 text-sm sm:text-base shadow-lg"
-                          >
-                            <span className="material-icons text-lg">sentiment_very_dissatisfied</span>
-                            Hard
-                          </button>
-                          <button
-                            onClick={() => handleAnswer('good')}
-                            className="px-4 sm:px-6 py-3 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm sm:text-base shadow-lg"
-                          >
-                            <span className="material-icons text-lg">sentiment_neutral</span>
-                            Good
-                          </button>
-                          <button
-                            onClick={() => handleAnswer('easy')}
-                            className="px-4 sm:px-6 py-3 bg-green-500 dark:bg-green-600 text-white rounded-lg hover:bg-green-600 dark:hover:bg-green-700 transition-colors flex items-center gap-2 text-sm sm:text-base shadow-lg"
-                          >
-                            <span className="material-icons text-lg">sentiment_very_satisfied</span>
-                            Easy
-                          </button>
-                        </div>
-                      )}
+                      {isFlipped && (() => {
+                        const currentCard = dueCards[currentCardIndex];
+                        const cardProgress = currentCard?.progress || null;
+                        
+                        // Calculate next review times for each button
+                        const againTime = calculateNextReviewTime(cardProgress, 'again');
+                        const hardTime = calculateNextReviewTime(cardProgress, 'hard');
+                        const goodTime = calculateNextReviewTime(cardProgress, 'good');
+                        const easyTime = calculateNextReviewTime(cardProgress, 'easy');
+                        
+                        return (
+                          <div className="mt-6 space-y-3 relative z-10">
+                            <div className="flex flex-wrap justify-center gap-2 sm:gap-3">
+                              <button
+                                onClick={() => handleAnswer('again')}
+                                className="px-4 sm:px-6 py-3 bg-white dark:bg-gray-700 border-2 border-red-500 dark:border-red-600 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex flex-col items-center gap-1 text-sm sm:text-base shadow-md min-w-[80px] sm:min-w-[100px]"
+                              >
+                                <span className="font-semibold text-red-600 dark:text-red-400">{formatNextReviewTime(againTime.nextDueDate)}</span>
+                                <span className="text-xs font-medium text-red-600 dark:text-red-400">Again</span>
+                              </button>
+                              <button
+                                onClick={() => handleAnswer('hard')}
+                                className="px-4 sm:px-6 py-3 bg-white dark:bg-gray-700 border-2 border-gray-400 dark:border-gray-500 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors flex flex-col items-center gap-1 text-sm sm:text-base shadow-md min-w-[80px] sm:min-w-[100px]"
+                              >
+                                <span className="font-semibold text-gray-700 dark:text-gray-300">{formatNextReviewTime(hardTime.nextDueDate)}</span>
+                                <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Hard</span>
+                              </button>
+                              <button
+                                onClick={() => handleAnswer('good')}
+                                className="px-4 sm:px-6 py-3 bg-white dark:bg-gray-700 border-2 border-green-500 dark:border-green-600 text-green-600 dark:text-green-400 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors flex flex-col items-center gap-1 text-sm sm:text-base shadow-md min-w-[80px] sm:min-w-[100px]"
+                              >
+                                <span className="font-semibold text-green-600 dark:text-green-400">{formatNextReviewTime(goodTime.nextDueDate)}</span>
+                                <span className="text-xs font-medium text-green-600 dark:text-green-400">Good</span>
+                              </button>
+                              <button
+                                onClick={() => handleAnswer('easy')}
+                                className="px-4 sm:px-6 py-3 bg-white dark:bg-gray-700 border-2 border-blue-500 dark:border-blue-600 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex flex-col items-center gap-1 text-sm sm:text-base shadow-md min-w-[80px] sm:min-w-[100px]"
+                              >
+                                <span className="font-semibold text-blue-600 dark:text-blue-400">{formatNextReviewTime(easyTime.nextDueDate)}</span>
+                                <span className="text-xs font-medium text-blue-600 dark:text-blue-400">Easy</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>

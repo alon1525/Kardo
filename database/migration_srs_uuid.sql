@@ -71,7 +71,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS user_progress (
     user_id UUID NOT NULL,  -- UUID for Supabase auth.users
     card_id INTEGER NOT NULL,
-    interval INTEGER DEFAULT 0,  -- Days until next review
+    interval NUMERIC(10, 6) DEFAULT 0,  -- Days until next review (supports fractional days for learning steps)
     ease_factor FLOAT DEFAULT 2.5,  -- Difficulty multiplier (minimum 1.3)
     repetitions INTEGER DEFAULT 0,  -- Number of successful reviews
     due_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- When card should be reviewed next

@@ -426,3 +426,19 @@ export const initProgress = async (deckId, userId) => {
   }
 };
 
+// Get deck statistics (new, learning, due counts)
+export const getDeckStatistics = async (deckId, userId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/decks/${deckId}/statistics?userId=${userId}`);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to get deck statistics');
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error getting deck statistics:', error);
+    throw error;
+  }
+};
+

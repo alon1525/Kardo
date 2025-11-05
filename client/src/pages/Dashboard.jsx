@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
-import { getUserDecks, createDeck, deleteDeck, getUserStats, updateDeckPublicStatus } from '../api/decks';
+import { getUserDecks, createDeck, deleteDeck, getUserStats, updateDeckPublicStatus, getDeckStatistics } from '../api/decks';
 
 /**
  * User dashboard showing decks, stats, and options to create/import decks
@@ -23,6 +23,7 @@ const Dashboard = () => {
     streak: 0,
     lastStudyDate: null
   });
+  const [deckStats, setDeckStats] = useState({}); // { deckId: { new, learning, due, total } }
   const [loading, setLoading] = useState(true);
   const [creatingDeck, setCreatingDeck] = useState(false);
 
@@ -49,6 +50,20 @@ const Dashboard = () => {
       // Load stats from API
       const userStats = await getUserStats(userId);
       setStats(userStats);
+      
+      // Load statistics for each deck
+      const statsMap = {};
+      for (const deck of userDecks) {
+        try {
+          const statistics = await getDeckStatistics(deck.id, userId);
+          statsMap[deck.id] = statistics;
+        } catch (error) {
+          console.error(`Error loading statistics for deck ${deck.id}:`, error);
+          // Set default stats if error
+          statsMap[deck.id] = { new: 0, learning: 0, due: 0, total: deck.cardCount || 0 };
+        }
+      }
+      setDeckStats(statsMap);
     } catch (error) {
       console.error('Error loading user data:', error);
     } finally {
@@ -261,10 +276,38 @@ const Dashboard = () => {
                     ? `${deck.description.substring(0, 35)}...` 
                     : deck.description || 'No description'}
                 </p>
+                
+                {/* Anki-style Statistics - Large numbers like in image */}
+                {deckStats[deck.id] && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-center gap-4">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{deckStats[deck.id].new || 0}</div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">New</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-red-600 dark:text-red-400">{deckStats[deck.id].due || 0}</div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">Due</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-green-600 dark:text-green-400">{deckStats[deck.id].learning || 0}</div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">Learning</div>
+                      </div>
+                    </div>
+                    {/* Show total and mature cards info */}
+                    <div className="mt-2 text-center text-xs text-gray-500 dark:text-gray-400">
+                      Total: {deckStats[deck.id].total || 0}
+                      {deckStats[deck.id].mature > 0 && (
+                        <span className="ml-2">• Mature: {deckStats[deck.id].mature}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex items-center text-sm text-gray-600 dark:text-gray-300 gap-4">
                   <span className="flex items-center gap-1 min-w-[80px]">
                     <span className="material-icons text-base text-blue-500 dark:text-blue-400">description</span>
-                    <span className="inline-block min-w-[50px]">{deck.cardCount} cards</span>
+                    <span className="inline-block min-w-[50px]">{deckStats[deck.id]?.total || deck.cardCount || 0} cards</span>
                   </span>
                   <span className="flex items-center gap-1">
                     <span className="material-icons text-base text-green-500 dark:text-green-400">calendar_today</span>

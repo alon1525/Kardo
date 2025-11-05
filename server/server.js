@@ -369,9 +369,10 @@ app.get('/api/decks/:deckId/due-cards', async (req, res) => {
       return res.json([]);
     }
     
-    // Get all cards in the deck that are either:
-    // 1. Not in user_progress (new cards - should always be shown)
-    // 2. Due for review (due_date <= now())
+    // Get cards in priority order: Due (red) → Learning (green) → New (blue)
+    // Priority 0: Due cards (due_date <= now()) - includes both review cards and learning cards that are due
+    // Priority 1: Learning cards (interval < 1 day, has been reviewed, not due yet)
+    // Priority 2: New cards (no user_progress OR never reviewed)
     const result = await pool.query(
       `SELECT 
         c.id,
@@ -380,17 +381,33 @@ app.get('/api/decks/:deckId/due-cards', async (req, res) => {
         c.back,
         c.difficulty,
         c.hint,
-        COALESCE(up.interval, 0) as interval,
+        COALESCE(up.interval::FLOAT, 0) as interval,
         COALESCE(up.ease_factor, 2.5) as ease_factor,
         COALESCE(up.repetitions, 0) as repetitions,
         COALESCE(up.due_date, CURRENT_TIMESTAMP) as due_date,
         up.last_review,
-        CASE WHEN up.user_id IS NULL THEN true ELSE false END as is_new
+        CASE 
+          WHEN up.user_id IS NULL THEN true 
+          WHEN up.repetitions = 0 AND up.last_review IS NULL THEN true
+          ELSE false 
+        END as is_new,
+        CASE 
+          WHEN up.user_id IS NULL THEN 2  -- New cards (priority 2)
+          WHEN up.repetitions = 0 AND up.last_review IS NULL THEN 2  -- New cards (never reviewed)
+          WHEN up.due_date <= CURRENT_TIMESTAMP THEN 0  -- Due cards (priority 0) - includes learning cards that are due
+          WHEN up.interval < 1 AND up.last_review IS NOT NULL THEN 1  -- Learning cards not yet due (priority 1)
+          ELSE 3  -- Other cards (shouldn't appear)
+        END as priority
       FROM cards c
       LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
       WHERE c.deck_id = $2
-        AND (up.user_id IS NULL OR up.due_date <= CURRENT_TIMESTAMP)
-      ORDER BY up.due_date ASC NULLS FIRST, c.id ASC
+        AND (
+          up.user_id IS NULL  -- New cards
+          OR (up.repetitions = 0 AND up.last_review IS NULL)  -- New cards (initialized but never reviewed)
+          OR up.due_date <= CURRENT_TIMESTAMP  -- Due cards (includes learning cards that are due)
+          OR (up.interval < 1 AND up.due_date > CURRENT_TIMESTAMP AND up.last_review IS NOT NULL)  -- Learning cards not yet due
+        )
+      ORDER BY priority ASC, up.due_date ASC NULLS FIRST, c.id ASC
       LIMIT 50`,
       [userId, deckId]
     );
@@ -409,7 +426,7 @@ app.get('/api/decks/:deckId/due-cards', async (req, res) => {
       difficulty: row.difficulty,
       hint: row.hint,
       progress: {
-        interval: row.interval,
+        interval: parseFloat(row.interval) || 0,
         ease_factor: parseFloat(row.ease_factor),
         repetitions: row.repetitions,
         due_date: row.due_date,
@@ -448,7 +465,7 @@ app.post('/api/cards/:cardId/review', async (req, res) => {
     if (progressResult.rows.length > 0) {
       const row = progressResult.rows[0];
       currentProgress = {
-        interval: row.interval,
+        interval: parseFloat(row.interval) || 0,
         ease_factor: parseFloat(row.ease_factor),
         repetitions: row.repetitions,
         due_date: row.due_date,
@@ -474,7 +491,7 @@ app.post('/api/cards/:cardId/review', async (req, res) => {
       [
         userId,
         cardId,
-        updatedProgress.interval,
+        parseFloat(updatedProgress.interval), // Ensure it's a number, not a string
         updatedProgress.ease_factor,
         updatedProgress.repetitions,
         updatedProgress.due_date,
@@ -513,14 +530,15 @@ app.post('/api/decks/:deckId/init-progress', async (req, res) => {
     
     console.log(`Initializing progress for ${cardsResult.rows.length} cards for user ${userId} in deck ${deckId}`);
     
-    // Initialize progress for each card (due immediately - set to current time)
+    // Initialize progress for each card (due immediately, but NOT reviewed yet)
+    // Setting last_review to NULL ensures cards are still counted as "new" until first review
     const now = new Date();
     const initialProgress = {
       interval: 0,
       ease_factor: 2.5,
       repetitions: 0,
       due_date: now,
-      last_review: null
+      last_review: null  // NULL means card hasn't been reviewed yet (still "new")
     };
     
     for (const card of cardsResult.rows) {
@@ -532,7 +550,7 @@ app.post('/api/decks/:deckId/init-progress', async (req, res) => {
           [
             userId,
             card.id,
-            initialProgress.interval,
+            parseFloat(initialProgress.interval), // Ensure it's a number
             initialProgress.ease_factor,
             initialProgress.repetitions,
             initialProgress.due_date,
@@ -551,6 +569,110 @@ app.post('/api/decks/:deckId/init-progress', async (req, res) => {
     });
   } catch (err) {
     console.error('Error initializing progress:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get deck statistics (new, learning, due counts)
+app.get('/api/decks/:deckId/statistics', async (req, res) => {
+  const deckId = req.params.deckId;
+  const userId = req.query.userId || req.headers['x-user-id'];
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  try {
+    // Count total cards in deck
+    const totalCardsResult = await pool.query(
+      'SELECT COUNT(*) as count FROM cards WHERE deck_id = $1',
+      [deckId]
+    );
+    const totalCards = parseInt(totalCardsResult.rows[0]?.count || 0);
+    
+    if (totalCards === 0) {
+      return res.json({
+        new: 0,
+        learning: 0,
+        due: 0,
+        total: 0
+      });
+    }
+    
+    // Count new cards: no user_progress OR has progress but never reviewed (repetitions = 0 and no last_review)
+    const newCardsResult = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM cards c
+       LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       WHERE c.deck_id = $2 
+         AND (up.user_id IS NULL 
+              OR (up.repetitions = 0 AND up.last_review IS NULL))`,
+      [userId, deckId]
+    );
+    const newCards = parseInt(newCardsResult.rows[0]?.count || 0);
+    
+    // Count learning/green cards: interval < 1 day, has been reviewed at least once
+    // Learning cards are cards that have been reviewed but are still in the learning phase
+    // Include cards where due_date <= now() so they appear immediately (they're due)
+    const learningCardsResult = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM cards c
+       INNER JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       WHERE c.deck_id = $2 
+         AND up.interval < 1
+         AND up.last_review IS NOT NULL`,
+      [userId, deckId]
+    );
+    const learningCards = parseInt(learningCardsResult.rows[0]?.count || 0);
+    
+    // Count due cards: due_date <= now() (includes both review cards and learning cards that are due)
+    // This is the "red" count - cards that need to be reviewed now
+    const dueCardsResult = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM cards c
+       LEFT JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       WHERE c.deck_id = $2
+         AND (up.user_id IS NULL OR up.due_date <= CURRENT_TIMESTAMP)`,
+      [userId, deckId]
+    );
+    const dueCards = parseInt(dueCardsResult.rows[0]?.count || 0);
+    
+    // Count mature cards: interval >= 1 day and due_date > now() (review cards not due yet)
+    const matureCardsResult = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM cards c
+       INNER JOIN user_progress up ON c.id = up.card_id AND up.user_id::text = $1::text
+       WHERE c.deck_id = $2
+         AND up.interval >= 1
+         AND up.due_date > CURRENT_TIMESTAMP`,
+      [userId, deckId]
+    );
+    const matureCards = parseInt(matureCardsResult.rows[0]?.count || 0);
+    
+    // Verify: new + learning + due + mature should equal total
+    const accountedFor = newCards + learningCards + dueCards + matureCards;
+    const unaccounted = totalCards - accountedFor;
+    
+    console.log(`Deck ${deckId} statistics for user ${userId}:`);
+    console.log(`  - New: ${newCards}`);
+    console.log(`  - Learning: ${learningCards}`);
+    console.log(`  - Due: ${dueCards}`);
+    console.log(`  - Mature: ${matureCards}`);
+    console.log(`  - Total: ${totalCards}`);
+    console.log(`  - Accounted for: ${accountedFor}`);
+    if (unaccounted > 0) {
+      console.warn(`  - Unaccounted cards: ${unaccounted} (may be cards with invalid progress data)`);
+    }
+    
+    res.json({
+      new: newCards,
+      learning: learningCards,
+      due: dueCards,
+      mature: matureCards,
+      total: totalCards
+    });
+  } catch (err) {
+    console.error('Error fetching deck statistics:', err);
     res.status(500).json({ error: err.message });
   }
 });
